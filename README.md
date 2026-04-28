@@ -32,8 +32,8 @@
 使用预构建 Docker 镜像运行示例校验：
 
 ```bash
-docker pull clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1
-docker run --rm -v "$PWD:/data" clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1 \
+docker pull clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.1
+docker run --rm -v "$PWD:/data" clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.1 \
   validate \
   --input /data/examples/demo_submit.xlsx
 ```
@@ -96,15 +96,15 @@ Excel 输入文件第 7/8 列中的母本/起始抗体序列会作为本次运�
 推荐直接使用已构建好的公共镜像：
 
 ```bash
-docker pull clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1
+docker pull clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.1
 ```
 
-该镜像仓库 ID 为 `clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1`，已基于当前 Dockerfile 构建。中国大陆和其他地区用户均可较快拉取，避免本地构建时访问国外基础镜像、Conda 源或 pip 源较慢的问题。
+该镜像仓库 ID 为 `clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.1`，已基于当前 Dockerfile 构建并推送到远端。中国大陆和其他地区用户均可较快拉取，避免本地构建时访问国外基础镜像、Conda 源或 pip 源较慢的问题。
 
 运行校验：
 
 ```bash
-docker run --rm -v "$PWD:/data" clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1 \
+docker run --rm -v "$PWD:/data" clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.1 \
   validate \
   --input /data/examples/demo_submit.xlsx \
   --output /data/examples/failed_reasons.csv
