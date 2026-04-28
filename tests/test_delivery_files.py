@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PREBUILT_IMAGE = "clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1"
 
 
 def test_dockerfile_defaults_to_official_base_image_and_package_sources():
@@ -27,7 +28,13 @@ def test_readme_documents_excel_only_parent_references_and_summary():
     assert "Validation summary" in readme
     assert "examples/demo_submit.xlsx" in readme
     assert "examples/demo_failed_reasons.csv" in readme
+    assert PREBUILT_IMAGE in readme
+    assert "docker pull clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1" in readme
+    assert "金标准测试数据" in readme
+    assert "随意替换、追加或扩展" in readme
     assert "临时追加额外阳性参考" not in readme
+    assert "如需扩展阳性参考库" not in readme
+    assert "直接修改源码中的 `data/positive.csv`" not in readme
     assert "--input /data/examples/input.csv" not in readme
 
 

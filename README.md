@@ -29,11 +29,11 @@
 
 ## 快速开始
 
-使用 Docker 构建镜像并运行示例校验：
+使用预构建 Docker 镜像运行示例校验：
 
 ```bash
-docker build -t ab-data-validator .
-docker run --rm -v "$PWD:/data" ab-data-validator \
+docker pull clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1
+docker run --rm -v "$PWD:/data" clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1 \
   validate \
   --input /data/examples/demo_submit.xlsx
 ```
@@ -82,18 +82,35 @@ Excel 第 7/8 列用于记录改造抗体对应的母本/起始抗体序列：
 | US12312404B2 | Compugen | COM-701 | IgG | 35 条 |
 | US20230227572A1–A4 | 天港免疫 | TGI-2 | IgG | 4 条 |
 
-内置阳性参考数据位于 `src/ab_data_validator/data/positive.csv`，共 48 条记录，随工具包一起分发，**无法通过命令行覆盖**。
+内置阳性参考数据位于 `src/ab_data_validator/data/positive.csv`，共 48 条记录，随工具包一起分发，是固定的金标准测试数据，**无法通过命令行覆盖**。
 
 Excel 输入文件第 7/8 列中的母本/起始抗体序列会作为本次运行的额外对照序列，与内置阳参一起参与所有候选抗体的 CDR 一致性过滤。它们不会写回内置阳参库。
 
 > **为什么不允许命令行覆盖内置阳参？**
-> 内置阳性参考代表已知的已公开专利抗体序列，是标准化校验的基准。允许随意替换可能导致校验结果不一致。如需扩展阳性参考库，请直接修改源码中的 `data/positive.csv` 文件。
+> 内置阳性参考是用于测试数据一致性过滤的金标准数据集，应保持固定和可追溯。命令行不允许覆盖，也不应从用户输入或常规运行中随意替换、追加或扩展。Excel 第 7/8 列提供的母本/起始抗体只作为本次运行的额外对照参与比较，不会改变内置阳参库。
 
 ---
 
 ## 推荐使用方式：Docker
 
-Dockerfile 默认使用官方构建源：
+推荐直接使用已构建好的公共镜像：
+
+```bash
+docker pull clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1
+```
+
+该镜像仓库 ID 为 `clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1`，已基于当前 Dockerfile 构建。中国大陆和其他地区用户均可较快拉取，避免本地构建时访问国外基础镜像、Conda 源或 pip 源较慢的问题。
+
+运行校验：
+
+```bash
+docker run --rm -v "$PWD:/data" clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1 \
+  validate \
+  --input /data/examples/demo_submit.xlsx \
+  --output /data/examples/failed_reasons.csv
+```
+
+如需审计、修改或自行构建镜像，可使用仓库内 Dockerfile。Dockerfile 默认使用官方构建源：
 
 - 基础镜像默认使用 `mambaorg/micromamba:1.5.10`。
 - Conda 默认使用 `https://repo.anaconda.com`，并通过 `https://conda.anaconda.org` 映射 `conda-forge` 与 `bioconda`。
@@ -116,7 +133,7 @@ docker build \
   -t ab-data-validator .
 ```
 
-运行校验：
+使用本地构建镜像运行校验：
 
 ```bash
 docker run --rm -v "$PWD:/data" ab-data-validator \
