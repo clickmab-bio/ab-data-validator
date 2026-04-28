@@ -198,6 +198,29 @@ def test_positive_nanobody_skips_light_chain_comparisons_for_full_candidate():
     assert [call[0] for call in aligner.calls] == ["CDRH1", "CDRH2", "CDRH3"]
 
 
+def test_progress_logger_records_major_validation_stages_in_order():
+    messages = []
+    validator = Validator(
+        numberer=FakeNumberer({"ab_h": make_chain(), "pos_h": make_chain("D", "E", "F")}),
+        aligner=RecordingAligner(),
+        progress_logger=messages.append,
+    )
+
+    validator.validate(
+        [AntibodyRow(name="Ab1", vh="ab_h", vl=None)],
+        [AntibodyRow(name="Pos1", vh="pos_h", vl=None)],
+    )
+
+    assert messages == [
+        "Numbering positive references",
+        "Numbered 1 positive references",
+        "Numbering candidate antibodies",
+        "Numbered 1 candidate antibodies",
+        "Comparing candidate CDRs to positive references",
+        "Completed CDR identity comparisons",
+    ]
+
+
 def test_parallel_candidate_processing_preserves_input_order():
     class DelayingNumberer(FakeNumberer):
         def number(self, sequence_id, sequence, chain):

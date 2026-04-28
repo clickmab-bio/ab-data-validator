@@ -51,6 +51,7 @@ class IdentityComparison:
 
 InputItem = TypeVar("InputItem")
 OutputItem = TypeVar("OutputItem")
+ProgressLogger = Callable[[str], None]
 
 
 CHAIN_REQUIRED_C_TERMINAL_POSITIONS = {
@@ -67,6 +68,7 @@ class Validator:
         aligner: Aligner,
         identity_threshold: float = 0.8,
         max_workers: int = 1,
+        progress_logger: ProgressLogger | None = None,
     ) -> None:
         if max_workers < 1:
             raise ValueError("max_workers must be greater than or equal to 1")
@@ -74,19 +76,32 @@ class Validator:
         self.aligner = aligner
         self.identity_threshold = identity_threshold
         self.max_workers = max_workers
+        self.progress_logger = progress_logger
 
     def validate(
         self,
         candidates: list[AntibodyRow],
         positives: list[AntibodyRow],
     ) -> list[ValidationFailure]:
+        self._log_progress("Numbering positive references")
         processed_positives = self._process_positives(positives)
+        self._log_progress(f"Numbered {len(processed_positives)} positive references")
+
+        self._log_progress("Numbering candidate antibodies")
         processed_candidates = self._ordered_map(self._process_candidate, candidates)
+        self._log_progress(f"Numbered {len(processed_candidates)} candidate antibodies")
+
+        self._log_progress("Comparing candidate CDRs to positive references")
         failures: list[ValidationFailure] = []
         for processed in processed_candidates:
             failures.extend(processed.failures)
             failures.extend(self._identity_failures(processed, processed_positives))
+        self._log_progress("Completed CDR identity comparisons")
         return failures
+
+    def _log_progress(self, message: str) -> None:
+        if self.progress_logger is not None:
+            self.progress_logger(message)
 
     def _process_positives(self, positives: list[AntibodyRow]) -> list[ProcessedPositive]:
         processed: list[ProcessedPositive] = []
