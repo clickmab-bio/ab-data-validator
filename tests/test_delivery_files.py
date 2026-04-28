@@ -37,6 +37,17 @@ def test_readme_documents_excel_only_parent_references_and_summary():
     assert "如需扩展阳性参考库" not in readme
     assert "直接修改源码中的 `data/positive.csv`" not in readme
     assert "--input /data/examples/input.csv" not in readme
+    assert "性能参考" in readme
+    assert "16 核服务器" in readme
+    assert "50 条纳米抗体序列" in readme
+    assert "耗时大于 37 秒" in readme
+    assert "重链 `VH`" in readme
+    assert "`>= 128`" in readme
+    assert "轻链 `VL`" in readme
+    assert "`>= 127`" in readme
+    assert "ARD-Y" in readme
+    assert "ARDGY" in readme
+    assert "identity = 4 / 5 = 0.8" in readme
 
 
 def test_examples_include_demo_input_and_expected_report():

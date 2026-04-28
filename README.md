@@ -11,6 +11,7 @@
 ## 目录
 
 - [快速开始](#快速开始)
+- [性能参考](#性能参考)
 - [输入格式](#输入格式)
 - [阳性参考数据](#阳性参考数据)
 - [推荐使用方式：Docker](#推荐使用方式docker)
@@ -39,6 +40,14 @@ docker run --rm -v "$PWD:/data" clickmab-hub.tencentcloudcr.com/public/ab-data-v
 ```
 
 校验结果将输出到 `examples/failed_reasons.csv`。仓库同时提供了该示例输入对应的参考结果：`examples/demo_failed_reasons.csv`。
+
+---
+
+## 性能参考
+
+在一台 16 核服务器上执行数据分析时，50 条纳米抗体序列的完整分析耗时大于 37 秒。该数据可作为用户预估运行时间的参考。
+
+实际耗时会受到 ANARCI、MUSCLE、序列长度、阳性参考数量、`--workers` 设置以及服务器当前负载影响。纳米抗体仅比较重链 CDR，但仍需要完成编号、CDR 提取和与参考序列的 CDR 一致性比较。
 
 ---
 
@@ -253,7 +262,8 @@ ab-data-validator validate \
 - `VH` 能够被 ANARCI 使用 IMGT 方案进行编号。
 - 非空的 `VL` 能够被 ANARCI 使用 IMGT 方案进行编号。
 - 每条编号后的链包含 IMGT 位置 `1`。
-- 每条编号后的链的最大 IMGT 位置 `>= 127`。
+- 重链 `VH` 编号后的最大 IMGT 位置 `>= 128`。
+- 轻链 `VL` 编号后的最大 IMGT 位置 `>= 127`。
 - 所需的 CDR 区域长度 `>= 1`。
 
 IMGT CDR 区域定义：
@@ -286,6 +296,18 @@ identity = 匹配的比对列数 / 总比对列数
 ```
 
 间隙列也计入总数。间隙与氨基酸的比对视为不匹配。当任一可比较 CDR 的一致性大于或等于阈值时，该候选即判定为失败。
+
+具体计算示例：
+
+```text
+aligned candidate CDR: ARD-Y
+aligned positive CDR:  ARDGY
+matching columns:       A R D   Y = 4
+total aligned columns:  5
+identity = 4 / 5 = 0.8
+```
+
+在该例中，第 4 列为间隙与氨基酸的比对，不计为匹配，但仍计入总比对列数。因此一致性为 `0.8`。当阈值为默认值 `0.8` 时，因为判定规则是 `identity >= threshold`，该 CDR 会触发高一致性失败。
 
 默认阈值：
 
