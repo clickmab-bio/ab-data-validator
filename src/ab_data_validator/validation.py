@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from ab_data_validator.cdr import extract_imgt_cdrs, required_cdr_names
 from ab_data_validator.models import AntibodyRow, InputType, ValidationFailure
@@ -37,6 +39,20 @@ class ProcessedPositive:
     cdrs: dict[str, str]
 
 
+@dataclass(frozen=True)
+class IdentityComparison:
+    candidate_name: str
+    candidate_input_type: InputType
+    cdr_name: str
+    candidate_cdr: str
+    positive_name: str
+    positive_cdr: str
+
+
+InputItem = TypeVar("InputItem")
+OutputItem = TypeVar("OutputItem")
+
+
 class Validator:
     def __init__(
         self,
@@ -44,10 +60,14 @@ class Validator:
         numberer: Numberer,
         aligner: Aligner,
         identity_threshold: float = 0.8,
+        max_workers: int = 1,
     ) -> None:
+        if max_workers < 1:
+            raise ValueError("max_workers must be greater than or equal to 1")
         self.numberer = numberer
         self.aligner = aligner
         self.identity_threshold = identity_threshold
+        self.max_workers = max_workers
 
     def validate(
         self,
@@ -55,17 +75,17 @@ class Validator:
         positives: list[AntibodyRow],
     ) -> list[ValidationFailure]:
         processed_positives = self._process_positives(positives)
+        processed_candidates = self._ordered_map(self._process_candidate, candidates)
         failures: list[ValidationFailure] = []
-        for candidate in candidates:
-            processed = self._process_candidate(candidate)
+        for processed in processed_candidates:
             failures.extend(processed.failures)
             failures.extend(self._identity_failures(processed, processed_positives))
         return failures
 
     def _process_positives(self, positives: list[AntibodyRow]) -> list[ProcessedPositive]:
         processed: list[ProcessedPositive] = []
-        for positive in positives:
-            item = self._process_antibody(positive, fatal=False)
+        processed_items = self._ordered_map(lambda positive: self._process_antibody(positive, fatal=False), positives)
+        for positive, item in zip(positives, processed_items, strict=True):
             if item.failures:
                 details = "; ".join(failure.details for failure in item.failures)
                 raise PositiveReferenceError(f"positive reference {positive.name} is invalid: {details}")
@@ -159,7 +179,7 @@ class Validator:
         candidate: ProcessedAntibody,
         positives: list[ProcessedPositive],
     ) -> list[ValidationFailure]:
-        failures: list[ValidationFailure] = []
+        comparisons: list[IdentityComparison] = []
         for cdr_name in required_cdr_names(candidate.row.input_type):
             candidate_cdr = candidate.cdrs.get(cdr_name)
             if not candidate_cdr:
@@ -168,28 +188,51 @@ class Validator:
                 positive_cdr = positive.cdrs.get(cdr_name)
                 if not positive_cdr:
                     continue
-                aligned_candidate, aligned_positive = self.aligner.align(
-                    cdr_name,
-                    candidate_cdr,
-                    positive_cdr,
-                )
-                identity = calculate_identity(aligned_candidate, aligned_positive)
-                if is_high_identity(identity, threshold=self.identity_threshold):
-                    chain = "VH" if cdr_name.startswith("CDRH") else "VL"
-                    failures.append(
-                        ValidationFailure(
-                            name=candidate.row.name,
-                            input_type=candidate.row.input_type,
-                            reason_type="high_cdr_identity",
-                            chain=chain,
-                            cdr=cdr_name,
-                            positive_name=positive.name,
-                            identity=identity,
-                            threshold=self.identity_threshold,
-                            details=(
-                                f"{cdr_name} identity to {positive.name} is "
-                                f"{identity:g} >= {self.identity_threshold:g}"
-                            ),
-                        )
+                comparisons.append(
+                    IdentityComparison(
+                        candidate_name=candidate.row.name,
+                        candidate_input_type=candidate.row.input_type,
+                        cdr_name=cdr_name,
+                        candidate_cdr=candidate_cdr,
+                        positive_name=positive.name,
+                        positive_cdr=positive_cdr,
                     )
-        return failures
+                )
+        failures = self._ordered_map(self._identity_failure, comparisons)
+        return [failure for failure in failures if failure is not None]
+
+    def _identity_failure(self, comparison: IdentityComparison) -> ValidationFailure | None:
+        aligned_candidate, aligned_positive = self.aligner.align(
+            comparison.cdr_name,
+            comparison.candidate_cdr,
+            comparison.positive_cdr,
+        )
+        identity = calculate_identity(aligned_candidate, aligned_positive)
+        if not is_high_identity(identity, threshold=self.identity_threshold):
+            return None
+        chain = "VH" if comparison.cdr_name.startswith("CDRH") else "VL"
+        return ValidationFailure(
+            name=comparison.candidate_name,
+            input_type=comparison.candidate_input_type,
+            reason_type="high_cdr_identity",
+            chain=chain,
+            cdr=comparison.cdr_name,
+            positive_name=comparison.positive_name,
+            identity=identity,
+            threshold=self.identity_threshold,
+            details=(
+                f"{comparison.cdr_name} identity to {comparison.positive_name} is "
+                f"{identity:g} >= {self.identity_threshold:g}"
+            ),
+        )
+
+    def _ordered_map(
+        self,
+        function: Callable[[InputItem], OutputItem],
+        items: Sequence[InputItem],
+    ) -> list[OutputItem]:
+        if self.max_workers <= 1 or len(items) <= 1:
+            return [function(item) for item in items]
+        workers = min(self.max_workers, len(items))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            return list(executor.map(function, items))

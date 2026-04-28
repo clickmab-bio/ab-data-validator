@@ -10,6 +10,7 @@ from ab_data_validator.anarci_runner import run_anarci
 from ab_data_validator.input_loader import InputLoadError, load_input_file
 from ab_data_validator.muscle import MuscleError, align_pair
 from ab_data_validator.numbering import NumberedResidue
+from ab_data_validator.parallel import resolve_worker_count
 from ab_data_validator.positive_library import PositiveLibraryError, load_positive_library
 from ab_data_validator.report import write_failure_report
 from ab_data_validator.summary import format_validation_summary
@@ -60,7 +61,23 @@ def _build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--identity-threshold", default=0.8, type=float)
     validate.add_argument("--anarci-bin", default="ANARCI")
     validate.add_argument("--muscle-bin", default="muscle")
+    validate.add_argument(
+        "--workers",
+        default=0,
+        type=_parse_worker_count,
+        help="parallel worker count; 0 auto-detects available CPU cores",
+    )
     return parser
+
+
+def _parse_worker_count(value: str) -> int:
+    try:
+        worker_count = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("workers must be an integer") from error
+    if worker_count < 0:
+        raise argparse.ArgumentTypeError("workers must be greater than or equal to 0")
+    return worker_count
 
 
 def get_builtin_positive_csv_path():
@@ -85,6 +102,7 @@ def _run_validate(
                 numberer=numberer or AnarciNumberer(anarci_bin=args.anarci_bin),
                 aligner=aligner or MuscleAligner(muscle_bin=args.muscle_bin),
                 identity_threshold=args.identity_threshold,
+                max_workers=resolve_worker_count(args.workers),
             )
             failures = validator.validate(loaded_input.candidates, positives)
         output_path = args.output or default_output_path(args.input)

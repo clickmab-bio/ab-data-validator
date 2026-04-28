@@ -1,5 +1,8 @@
+import time
+
 import pytest
 
+from ab_data_validator.muscle import MuscleError
 from ab_data_validator.models import AntibodyRow
 from ab_data_validator.numbering import NumberedResidue
 from ab_data_validator.validation import PositiveReferenceError, Validator
@@ -158,3 +161,118 @@ def test_positive_nanobody_skips_light_chain_comparisons_for_full_candidate():
     validator.validate([candidate], [positive])
 
     assert [call[0] for call in aligner.calls] == ["CDRH1", "CDRH2", "CDRH3"]
+
+
+def test_parallel_candidate_processing_preserves_input_order():
+    class DelayingNumberer(FakeNumberer):
+        def number(self, sequence_id, sequence, chain):
+            if sequence == "first_bad":
+                time.sleep(0.02)
+            return super().number(sequence_id, sequence, chain)
+
+    bad_chain = make_chain()[1:]
+    validator = Validator(
+        numberer=DelayingNumberer(
+            {
+                "first_bad": bad_chain,
+                "second_bad": bad_chain,
+                "pos_h": make_chain("D", "E", "F"),
+            }
+        ),
+        aligner=RecordingAligner(),
+        max_workers=2,
+    )
+
+    failures = validator.validate(
+        [
+            AntibodyRow(name="First", vh="first_bad", vl=None),
+            AntibodyRow(name="Second", vh="second_bad", vl=None),
+        ],
+        [AntibodyRow(name="Pos1", vh="pos_h", vl=None)],
+    )
+
+    assert [failure.name for failure in failures] == ["First", "Second"]
+
+
+def test_parallel_identity_processing_preserves_cdr_and_positive_order():
+    class AlwaysHighIdentityAligner:
+        def align(self, cdr_name, candidate_cdr, positive_cdr):
+            if cdr_name == "CDRH1" and positive_cdr.startswith("D"):
+                time.sleep(0.02)
+            return candidate_cdr, candidate_cdr
+
+    validator = Validator(
+        numberer=FakeNumberer(
+            {
+                "ab_h": make_chain("A", "B", "C"),
+                "pos1_h": make_chain("D", "E", "F"),
+                "pos2_h": make_chain("G", "H", "I"),
+            }
+        ),
+        aligner=AlwaysHighIdentityAligner(),
+        max_workers=4,
+    )
+
+    failures = validator.validate(
+        [AntibodyRow(name="Ab1", vh="ab_h", vl=None)],
+        [
+            AntibodyRow(name="Pos1", vh="pos1_h", vl=None),
+            AntibodyRow(name="Pos2", vh="pos2_h", vl=None),
+        ],
+    )
+
+    assert [(failure.cdr, failure.positive_name) for failure in failures] == [
+        ("CDRH1", "Pos1"),
+        ("CDRH1", "Pos2"),
+        ("CDRH2", "Pos1"),
+        ("CDRH2", "Pos2"),
+        ("CDRH3", "Pos1"),
+        ("CDRH3", "Pos2"),
+    ]
+
+
+def test_parallel_positive_processing_reports_first_invalid_positive_in_input_order():
+    class DelayingNumberer(FakeNumberer):
+        def number(self, sequence_id, sequence, chain):
+            if sequence == "bad_first":
+                time.sleep(0.02)
+            return super().number(sequence_id, sequence, chain)
+
+    bad_chain = make_chain()[1:]
+    validator = Validator(
+        numberer=DelayingNumberer(
+            {
+                "bad_first": bad_chain,
+                "bad_second": bad_chain,
+            }
+        ),
+        aligner=RecordingAligner(),
+        max_workers=2,
+    )
+
+    with pytest.raises(PositiveReferenceError, match="BadFirst"):
+        validator.validate(
+            [AntibodyRow(name="Ab1", vh="unused", vl=None)],
+            [
+                AntibodyRow(name="BadFirst", vh="bad_first", vl=None),
+                AntibodyRow(name="BadSecond", vh="bad_second", vl=None),
+            ],
+        )
+
+
+def test_parallel_identity_processing_propagates_alignment_errors():
+    class FailingAligner:
+        def align(self, cdr_name, candidate_cdr, positive_cdr):
+            raise MuscleError("MUSCLE failed")
+
+    validator = Validator(
+        numberer=FakeNumberer({"ab_h": make_chain(), "pos_h": make_chain()}),
+        aligner=FailingAligner(),
+        max_workers=2,
+    )
+
+    with pytest.raises(MuscleError, match="MUSCLE failed"):
+        validator.validate(
+            [AntibodyRow(name="Ab1", vh="ab_h", vl=None)],
+            [AntibodyRow(name="Pos1", vh="pos_h", vl=None)],
+        )

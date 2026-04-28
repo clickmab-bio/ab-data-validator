@@ -28,6 +28,7 @@ def test_readme_documents_excel_only_parent_references_and_summary():
     assert "Validation summary" in readme
     assert "examples/demo_submit.xlsx" in readme
     assert "examples/demo_failed_reasons.csv" in readme
+    assert "--workers" in readme
     assert PREBUILT_IMAGE in readme
     assert "docker pull clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1" in readme
     assert "金标准测试数据" in readme

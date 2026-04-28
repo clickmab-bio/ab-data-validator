@@ -196,6 +196,52 @@ def test_cli_custom_threshold_changes_identity_filtering(tmp_path, monkeypatch):
     assert read_failure_rows(output_path) == []
 
 
+def test_cli_passes_resolved_worker_count_to_validator(tmp_path, monkeypatch):
+    input_path = tmp_path / "input.xlsx"
+    output_path = tmp_path / "failed.csv"
+    write_input_xlsx(input_path, [[1, "Ab1", "ab_h", "n/a", 1, "优化改造", None, None]])
+    use_builtin_positive(monkeypatch, tmp_path)
+    captured = {}
+
+    class RecordingValidator:
+        def __init__(self, *, numberer, aligner, identity_threshold, max_workers):
+            del numberer, aligner, identity_threshold
+            captured["max_workers"] = max_workers
+
+        def validate(self, candidates, positives):
+            captured["candidate_count"] = len(candidates)
+            captured["positive_count"] = len(positives)
+            return []
+
+    monkeypatch.setattr("ab_data_validator.cli.resolve_worker_count", lambda requested: 6)
+    monkeypatch.setattr("ab_data_validator.cli.Validator", RecordingValidator)
+
+    exit_code = main(
+        [
+            "validate",
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+            "--workers",
+            "0",
+        ],
+        numberer=FakeNumberer({}),
+        aligner=FixedIdentityAligner(("AAAAAAAB", "AAAAAAAC")),
+    )
+
+    assert exit_code == 0
+    assert captured == {"max_workers": 6, "candidate_count": 1, "positive_count": 1}
+
+
+def test_cli_rejects_negative_worker_count(tmp_path):
+    input_path = tmp_path / "input.xlsx"
+    write_input_xlsx(input_path, [[1, "Ab1", "ab_h", "n/a", 1, "优化改造", None, None]])
+
+    with pytest.raises(SystemExit):
+        main(["validate", "--input", str(input_path), "--workers", "-1"])
+
+
 def test_cli_prints_summary_after_successful_validation(tmp_path, capsys, monkeypatch):
     input_path = tmp_path / "input.xlsx"
     output_path = tmp_path / "failed.csv"

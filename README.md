@@ -224,6 +224,7 @@ ab-data-validator validate [参数]
 | `--identity-threshold` | 否 | `0.8` | CDR 一致性阈值，范围 0–1 |
 | `--anarci-bin` | 否 | `ANARCI` | ANARCI 可执行文件路径或名称 |
 | `--muscle-bin` | 否 | `muscle` | MUSCLE 可执行文件路径或名称 |
+| `--workers` | 否 | `0` | 并行 worker 数；`0` 表示按当前可用 CPU 核心数自动检测，`1` 表示串行执行 |
 
 示例 — 使用自定义阈值：
 
@@ -232,6 +233,15 @@ ab-data-validator validate \
   --input input.xlsx \
   --output failed_reasons.csv \
   --identity-threshold 0.75
+```
+
+示例 — 限制并行数量：
+
+```bash
+ab-data-validator validate \
+  --input input.xlsx \
+  --output failed_reasons.csv \
+  --workers 4
 ```
 
 ---
