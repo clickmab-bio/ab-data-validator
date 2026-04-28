@@ -29,14 +29,16 @@
 
 ## 快速开始
 
-使用 Docker 一行命令完成校验：
+使用 Docker 构建镜像并运行示例校验：
 
 ```bash
 docker build -t ab-data-validator .
-docker run --rm -v "$PWD:/data" ab-data-validator validate --input /data/input.xlsx
+docker run --rm -v "$PWD:/data" ab-data-validator \
+  validate \
+  --input /data/examples/demo_submit.xlsx
 ```
 
-校验结果将输出到输入文件所在目录下的 `failed_reasons.csv`。
+校验结果将输出到 `examples/failed_reasons.csv`。仓库同时提供了该示例输入对应的参考结果：`examples/demo_failed_reasons.csv`。
 
 ---
 
@@ -91,11 +93,11 @@ Excel 输入文件第 7/8 列中的母本/起始抗体序列会作为本次运�
 
 ## 推荐使用方式：Docker
 
-Dockerfile 默认面向中国大陆网络环境构建：
+Dockerfile 默认使用官方构建源：
 
-- 基础镜像默认使用 DaoCloud Docker Hub 加速前缀。
-- Conda 默认使用清华 Anaconda 镜像，并映射 `conda-forge` 与 `bioconda`。
-- pip 默认使用清华 PyPI 镜像。
+- 基础镜像默认使用 `mambaorg/micromamba:1.5.10`。
+- Conda 默认使用 `https://repo.anaconda.com`，并通过 `https://conda.anaconda.org` 映射 `conda-forge` 与 `bioconda`。
+- pip 默认使用 `https://pypi.org/simple`。
 
 构建镜像：
 
@@ -103,22 +105,14 @@ Dockerfile 默认面向中国大陆网络环境构建：
 docker build -t ab-data-validator .
 ```
 
-如果需要切换到北外 Anaconda 镜像：
+如果需要在内网构建，可以覆盖为内网同步的 Micromamba 镜像和包源：
 
 ```bash
 docker build \
-  --build-arg CONDA_MIRROR=https://mirrors.bfsu.edu.cn/anaconda \
-  --build-arg CONDA_CUSTOM_CHANNEL_ROOT=https://mirrors.bfsu.edu.cn/anaconda/cloud \
-  -t ab-data-validator .
-```
-
-如果已有可用的 Docker Hub 加速配置，也可以覆盖基础镜像。海外或内网官方源环境可同时覆盖 Conda 根路径：
-
-```bash
-docker build \
-  --build-arg BASE_IMAGE=mambaorg/micromamba:1.5.10 \
-  --build-arg CONDA_MIRROR=https://repo.anaconda.com \
-  --build-arg CONDA_CUSTOM_CHANNEL_ROOT=https://conda.anaconda.org \
+  --build-arg BASE_IMAGE=your-registry.example.com/mambaorg/micromamba:1.5.10 \
+  --build-arg CONDA_MIRROR=https://your-conda-mirror.example.com/anaconda \
+  --build-arg CONDA_CUSTOM_CHANNEL_ROOT=https://your-conda-mirror.example.com/anaconda/cloud \
+  --build-arg PIP_INDEX_URL=https://your-pypi-mirror.example.com/simple \
   -t ab-data-validator .
 ```
 
@@ -127,11 +121,11 @@ docker build \
 ```bash
 docker run --rm -v "$PWD:/data" ab-data-validator \
   validate \
-  --input /data/input.xlsx \
-  --output /data/failed_reasons.csv
+  --input /data/examples/demo_submit.xlsx \
+  --output /data/examples/failed_reasons.csv
 ```
 
-默认输出路径为输入文件所在目录下的 `failed_reasons.csv`。
+仓库内置示例输入为 `examples/demo_submit.xlsx`，对应的参考输出为 `examples/demo_failed_reasons.csv`。`examples/failed_reasons.csv` 是本地运行产物，已在 `.gitignore` 中忽略。
 
 > ⚠️ **安全提示**：当前 Dockerfile 中使用 `USER root` 运行容器，这是为了确保对挂载卷的读写权限。在生产环境中部署时，请注意评估安全风险，或考虑使用 `--user` 参数指定非特权用户运行。
 
@@ -346,6 +340,9 @@ ab-data-validator/
 ├── pyproject.toml          # Python 项目元数据与构建配置
 ├── LICENSE                 # MIT 许可证
 ├── README.md               # 本文档
+├── examples/
+│   ├── demo_submit.xlsx        # 示例输入 Excel
+│   └── demo_failed_reasons.csv # 示例输入对应的参考失败报告
 ├── src/ab_data_validator/
 │   ├── __init__.py         # 包初始化与版本号
 │   ├── cli.py              # 命令行入口与参数解析

@@ -4,13 +4,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_dockerfile_defaults_to_china_friendly_mirrors():
+def test_dockerfile_defaults_to_official_base_image_and_package_sources():
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
-    assert "ARG BASE_IMAGE=m.daocloud.io/docker.io/mambaorg/micromamba:1.5.10" in dockerfile
-    assert "ARG CONDA_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/anaconda" in dockerfile
-    assert "ARG CONDA_CUSTOM_CHANNEL_ROOT=https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud" in dockerfile
-    assert "ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple" in dockerfile
+    assert "ARG BASE_IMAGE=mambaorg/micromamba:1.5.10" in dockerfile
+    assert "ARG CONDA_MIRROR=https://repo.anaconda.com" in dockerfile
+    assert "ARG CONDA_CUSTOM_CHANNEL_ROOT=https://conda.anaconda.org" in dockerfile
+    assert "ARG PIP_INDEX_URL=https://pypi.org/simple" in dockerfile
     assert "custom_channels" in dockerfile
     assert "bioconda: ${CONDA_CUSTOM_CHANNEL_ROOT}" in dockerfile
     assert "repodata_use_zst: false" in dockerfile
@@ -25,8 +25,22 @@ def test_readme_documents_excel_only_parent_references_and_summary():
     assert "输入文件路径（`.xlsx` 或 `.xlsm`）" in readme
     assert "母本/起始抗体" in readme
     assert "Validation summary" in readme
+    assert "examples/demo_submit.xlsx" in readme
+    assert "examples/demo_failed_reasons.csv" in readme
     assert "临时追加额外阳性参考" not in readme
     assert "--input /data/examples/input.csv" not in readme
+
+
+def test_examples_include_demo_input_and_expected_report():
+    demo_input = ROOT / "examples" / "demo_submit.xlsx"
+    expected_report = ROOT / "examples" / "demo_failed_reasons.csv"
+
+    assert demo_input.is_file()
+    assert demo_input.stat().st_size > 0
+    assert expected_report.is_file()
+    assert expected_report.read_text(encoding="utf-8").startswith(
+        "name,input_type,passed,reason_type,chain,cdr,positive_name,identity,threshold,details"
+    )
 
 
 def test_project_description_mentions_excel_not_csv_user_input():

@@ -1,9 +1,9 @@
-ARG BASE_IMAGE=m.daocloud.io/docker.io/mambaorg/micromamba:1.5.10
+ARG BASE_IMAGE=mambaorg/micromamba:1.5.10
 FROM ${BASE_IMAGE}
 
-ARG CONDA_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/anaconda
-ARG CONDA_CUSTOM_CHANNEL_ROOT=https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud
-ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG CONDA_MIRROR=https://repo.anaconda.com
+ARG CONDA_CUSTOM_CHANNEL_ROOT=https://conda.anaconda.org
+ARG PIP_INDEX_URL=https://pypi.org/simple
 ENV PIP_INDEX_URL=${PIP_INDEX_URL}
 
 COPY --chown=$MAMBA_USER:$MAMBA_USER environment.yml /tmp/environment.yml
