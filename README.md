@@ -1,4 +1,4 @@
-# AB Data Validator
+# Ab Data Validator
 
 🔬 抗体序列数据质量校验工具 — 基于 IMGT 编号体系，自动校验序列完整性并过滤与已知阳性参考高度相似的候选抗体。
 
