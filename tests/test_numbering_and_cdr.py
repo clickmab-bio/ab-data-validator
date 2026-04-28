@@ -35,6 +35,16 @@ def test_chain_rejects_max_position_below_127():
     assert result.max_position == 126
 
 
+def test_chain_rejects_max_position_below_explicit_requirement():
+    chain = make_chain(1, 127)
+
+    result = check_chain_completeness(chain, required_c_terminal_position=128)
+
+    assert not result.is_complete
+    assert result.c_terminal_too_short
+    assert result.max_position == 127
+
+
 def test_extracts_imgt_heavy_chain_cdrs():
     chain = make_chain(1, 127)
 

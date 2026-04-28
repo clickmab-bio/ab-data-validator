@@ -8,8 +8,8 @@ from ab_data_validator.numbering import NumberedResidue
 from ab_data_validator.validation import PositiveReferenceError, Validator
 
 
-def make_chain(h1="A", h2="B", h3="C"):
-    residues = [NumberedResidue(position=position, insertion="", residue="F") for position in range(1, 128)]
+def make_chain(h1="A", h2="B", h3="C", *, stop=128):
+    residues = [NumberedResidue(position=position, insertion="", residue="F") for position in range(1, stop + 1)]
     replacements = {
         range(27, 39): h1,
         range(56, 66): h2,
@@ -129,6 +129,41 @@ def test_candidate_with_chain_failure_still_reports_available_high_identity_cdrs
         "high_cdr_identity",
     ]
     assert failures[1].cdr == "CDRH3"
+
+
+def test_heavy_chain_requires_imgt_position_128():
+    candidate = AntibodyRow(name="ShortHeavy", vh="short_h", vl=None)
+    positive = AntibodyRow(name="Pos1", vh="pos_h", vl=None)
+    validator = Validator(
+        numberer=FakeNumberer({"short_h": make_chain(stop=127), "pos_h": make_chain("D", "E", "F")}),
+        aligner=RecordingAligner(),
+    )
+
+    failures = validator.validate([candidate], [positive])
+
+    assert [failure.reason_type for failure in failures] == ["c_terminal_too_short"]
+    assert failures[0].chain == "VH"
+    assert failures[0].details == "VH max IMGT position is 127, expected >= 128"
+
+
+def test_light_chain_accepts_imgt_position_127():
+    candidate = AntibodyRow(name="FullAb", vh="ab_h", vl="ab_l")
+    positive = AntibodyRow(name="Pos1", vh="pos_h", vl="pos_l")
+    validator = Validator(
+        numberer=FakeNumberer(
+            {
+                "ab_h": make_chain("A", "B", "C"),
+                "ab_l": make_chain("D", "E", "F", stop=127),
+                "pos_h": make_chain("G", "H", "I"),
+                "pos_l": make_chain("J", "K", "L", stop=127),
+            }
+        ),
+        aligner=RecordingAligner(),
+    )
+
+    failures = validator.validate([candidate], [positive])
+
+    assert failures == []
 
 
 def test_invalid_positive_reference_is_fatal():

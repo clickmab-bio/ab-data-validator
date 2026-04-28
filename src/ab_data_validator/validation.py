@@ -53,6 +53,12 @@ InputItem = TypeVar("InputItem")
 OutputItem = TypeVar("OutputItem")
 
 
+CHAIN_REQUIRED_C_TERMINAL_POSITIONS = {
+    "VH": 128,
+    "VL": 127,
+}
+
+
 class Validator:
     def __init__(
         self,
@@ -150,7 +156,11 @@ class Validator:
             )
             return
 
-        completeness = check_chain_completeness(residues)
+        required_c_terminal_position = CHAIN_REQUIRED_C_TERMINAL_POSITIONS[chain]
+        completeness = check_chain_completeness(
+            residues,
+            required_c_terminal_position=required_c_terminal_position,
+        )
         if completeness.missing_n_terminal:
             failures.append(
                 ValidationFailure(
@@ -169,7 +179,10 @@ class Validator:
                     input_type=row.input_type,
                     reason_type="c_terminal_too_short",
                     chain=chain,
-                    details=f"{chain} max IMGT position is {max_position}, expected >= 127",
+                    details=(
+                        f"{chain} max IMGT position is {max_position}, "
+                        f"expected >= {required_c_terminal_position}"
+                    ),
                 )
             )
         cdrs.update(extract_imgt_cdrs(residues, chain_prefix=chain_prefix))
