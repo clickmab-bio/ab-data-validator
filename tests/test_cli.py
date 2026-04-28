@@ -1,16 +1,18 @@
 import csv
+import re
+from datetime import datetime, timezone
 
 import pytest
 
-from ab_data_validator.cli import main
+from ab_data_validator.cli import _format_progress_message, main
 from ab_data_validator.muscle import MuscleError
 from ab_data_validator.numbering import NumberedResidue
 from tests.xlsx_utils import write_xlsx
 
 
-def make_chain(h1="A", h2="B", h3="C"):
+def make_chain(h1="A", h2="B", h3="C", *, stop=128):
     residues = []
-    for position in range(1, 128):
+    for position in range(1, stop + 1):
         residue = "F"
         if 27 <= position <= 38:
             residue = h1
@@ -75,6 +77,14 @@ def use_builtin_positive(monkeypatch, tmp_path, content="抗体名称,类型,抗
     write_csv(positive_path, content)
     monkeypatch.setattr("ab_data_validator.cli.get_builtin_positive_csv_path", lambda: positive_path)
     return positive_path
+
+
+def test_cli_formats_progress_message_in_beijing_time():
+    utc_time = datetime(2026, 4, 28, 6, 57, 12, tzinfo=timezone.utc)
+
+    message = _format_progress_message("Loading input: /data/input.xlsx", now=utc_time)
+
+    assert message == "[2026-04-28 14:57:12 UTC+08:00] [ab-data-validator] Loading input: /data/input.xlsx"
 
 
 def test_cli_validate_writes_failure_report_with_builtin_positive(tmp_path, monkeypatch):
@@ -204,9 +214,10 @@ def test_cli_passes_resolved_worker_count_to_validator(tmp_path, monkeypatch):
     captured = {}
 
     class RecordingValidator:
-        def __init__(self, *, numberer, aligner, identity_threshold, max_workers):
+        def __init__(self, *, numberer, aligner, identity_threshold, max_workers, progress_logger):
             del numberer, aligner, identity_threshold
             captured["max_workers"] = max_workers
+            captured["has_progress_logger"] = progress_logger is not None
 
         def validate(self, candidates, positives):
             captured["candidate_count"] = len(candidates)
@@ -231,7 +242,12 @@ def test_cli_passes_resolved_worker_count_to_validator(tmp_path, monkeypatch):
     )
 
     assert exit_code == 0
-    assert captured == {"max_workers": 6, "candidate_count": 1, "positive_count": 1}
+    assert captured == {
+        "max_workers": 6,
+        "has_progress_logger": True,
+        "candidate_count": 1,
+        "positive_count": 1,
+    }
 
 
 def test_cli_rejects_negative_worker_count(tmp_path):
@@ -279,6 +295,42 @@ def test_cli_prints_summary_after_successful_validation(tmp_path, capsys, monkey
     assert "Passed: 1" in captured.out
     assert "Failed: 1" in captured.out
     assert f"Failure report: {output_path}" in captured.out
+
+
+def test_cli_writes_timestamped_progress_logs_to_stderr(tmp_path, capsys, monkeypatch):
+    input_path = tmp_path / "input.xlsx"
+    output_path = tmp_path / "failed.csv"
+    write_input_xlsx(input_path, [[1, "Ab1", "ab_h", "n/a", 1, "优化改造", None, None]])
+    use_builtin_positive(monkeypatch, tmp_path)
+
+    exit_code = main(
+        [
+            "validate",
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        ],
+        numberer=FakeNumberer({"ab_h": make_chain(), "pos_h": make_chain()}),
+        aligner=FixedIdentityAligner(("AAAAAAAB", "AAAAAAAC")),
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert re.search(
+        r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC\+08:00\] "
+        r"\[ab-data-validator\] Loading input:",
+        captured.err,
+    )
+    assert "[ab-data-validator] Loaded 1 candidates and 0 parent references" in captured.err
+    assert "[ab-data-validator] Loaded 1 built-in positive references" in captured.err
+    assert "[ab-data-validator] Using " in captured.err
+    assert "[ab-data-validator] Numbering positive references" in captured.err
+    assert "[ab-data-validator] Numbering candidate antibodies" in captured.err
+    assert "[ab-data-validator] Comparing candidate CDRs to positive references" in captured.err
+    assert "[ab-data-validator] Writing failure report:" in captured.err
+    assert "Validation summary" in captured.out
+    assert "Validation summary" not in captured.err
 
 
 def test_cli_returns_nonzero_for_invalid_builtin_positive_reference(tmp_path, capsys, monkeypatch):

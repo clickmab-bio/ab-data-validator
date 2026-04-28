@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime, timedelta, timezone
 from importlib import resources
 from pathlib import Path
 from typing import Sequence
@@ -36,6 +37,22 @@ class MuscleAligner:
     def align(self, cdr_name: str, candidate_cdr: str, positive_cdr: str) -> tuple[str, str]:
         del cdr_name
         return align_pair(candidate_cdr, positive_cdr, muscle_bin=self.muscle_bin)
+
+
+BEIJING_TZ = timezone(timedelta(hours=8), "UTC+08:00")
+
+
+def _format_progress_message(message: str, *, now: datetime | None = None) -> str:
+    current_time = datetime.now(BEIJING_TZ) if now is None else now
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=BEIJING_TZ)
+    current_time = current_time.astimezone(BEIJING_TZ)
+    timestamp = current_time.strftime("%Y-%m-%d %H:%M:%S")
+    return f"[{timestamp} UTC+08:00] [ab-data-validator] {message}"
+
+
+def _print_progress(message: str) -> None:
+    print(_format_progress_message(message), file=sys.stderr)
 
 
 def main(
@@ -94,18 +111,30 @@ def _run_validate(
     numberer: Numberer | None,
     aligner: Aligner | None,
 ) -> int:
+    progress_logger = _print_progress
     try:
+        progress_logger(f"Loading input: {args.input}")
         loaded_input = load_input_file(args.input)
+        progress_logger(
+            f"Loaded {len(loaded_input.candidates)} candidates and "
+            f"{len(loaded_input.parent_references)} parent references"
+        )
         with resources.as_file(get_builtin_positive_csv_path()) as positive_path:
-            positives = load_positive_library(positive_path) + loaded_input.parent_references
+            builtin_positives = load_positive_library(positive_path)
+            progress_logger(f"Loaded {len(builtin_positives)} built-in positive references")
+            positives = builtin_positives + loaded_input.parent_references
+            max_workers = resolve_worker_count(args.workers)
+            progress_logger(f"Using {max_workers} worker(s)")
             validator = Validator(
                 numberer=numberer or AnarciNumberer(anarci_bin=args.anarci_bin),
                 aligner=aligner or MuscleAligner(muscle_bin=args.muscle_bin),
                 identity_threshold=args.identity_threshold,
-                max_workers=resolve_worker_count(args.workers),
+                max_workers=max_workers,
+                progress_logger=progress_logger,
             )
             failures = validator.validate(loaded_input.candidates, positives)
         output_path = args.output or default_output_path(args.input)
+        progress_logger(f"Writing failure report: {output_path}")
         write_failure_report(output_path, failures)
         print(format_validation_summary(loaded_input.candidates, failures, output_path))
     except (
