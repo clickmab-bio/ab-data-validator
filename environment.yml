@@ -6,5 +6,6 @@ dependencies:
   - python=3.10
   - bioconda::anarci==2021.02.04
   - bioconda::muscle=5.*
+  - openpyxl=3.1.*
   - pytest
   - pip
