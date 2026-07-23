@@ -117,3 +117,31 @@ def test_prepare_patent_library_requires_requested_vhh_count(tmp_path):
             benchmark_path=tmp_path / "benchmark.xlsx",
             benchmark_size=3,
         )
+
+
+def test_prepare_patent_library_preserves_later_unique_name_during_renaming(tmp_path):
+    source = tmp_path / "source.xlsx"
+    workbook = Workbook()
+    library = workbook.active
+    library.title = "参考阳参抗体"
+    library.append(SOURCE_HEADERS)
+    library.append(["A", "VHH", "ACD", None, None, None, None, None, None])
+    library.append(["A", "VHH", "EFG", None, None, None, None, None, None])
+    library.append(["A-1", "VHH", "HIK", None, None, None, None, None, None])
+    workbook.create_sheet("抗体提交格式")
+    workbook.save(source)
+
+    summary = prepare_patent_library(
+        source_path=source,
+        cleaned_path=tmp_path / "cleaned.xlsx",
+        csv_path=tmp_path / "positive.csv",
+        benchmark_path=tmp_path / "benchmark.xlsx",
+        benchmark_size=3,
+    )
+
+    cleaned = load_workbook(tmp_path / "cleaned.xlsx")
+    names = [row[0] for row in cleaned.worksheets[0].iter_rows(min_row=2, values_only=True)]
+    assert names == ["A", "A-2", "A-1"]
+    assert names[2] == "A-1"
+    assert len(names) == len(set(names))
+    assert summary.renamed_records == 1

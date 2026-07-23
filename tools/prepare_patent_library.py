@@ -162,15 +162,21 @@ def _remove_sequence_duplicates(records: list[_Record]) -> tuple[list[_Record], 
 
 
 def _rename_records(records: list[_Record]) -> int:
+    original_names = {record.name for record in records}
+    occurrences: dict[str, int] = {}
     used: set[str] = set()
     renamed = 0
     for record in records:
         original = record.name
-        candidate = original
-        suffix = 1
-        while candidate in used:
+        occurrences[original] = occurrences.get(original, 0) + 1
+        if occurrences[original] == 1:
+            candidate = original
+        else:
+            suffix = 1
             candidate = f"{original}-{suffix}"
-            suffix += 1
+            while candidate in original_names or candidate in used:
+                suffix += 1
+                candidate = f"{original}-{suffix}"
         record.name = candidate
         used.add(candidate)
         renamed += candidate != original
