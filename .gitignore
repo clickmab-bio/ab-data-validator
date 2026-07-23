@@ -7,4 +7,5 @@ build/
 dist/
 .venv/
 docs/
+.worktrees/
 examples/failed_reasons.csv
