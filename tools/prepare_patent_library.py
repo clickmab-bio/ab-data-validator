@@ -5,7 +5,11 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import os
 import re
+import shutil
+import tempfile
+from copy import copy
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -67,7 +71,9 @@ def prepare_patent_library(
     expected_sha256: str | None = None,
 ) -> PreparationSummary:
     """Clean a patent source workbook and export its positive and VHH libraries."""
-    source_path = Path(source_path)
+    source_path, cleaned_path, csv_path, benchmark_path = _validate_paths(
+        source_path, cleaned_path, csv_path, benchmark_path
+    )
     source_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
     if expected_sha256 is not None and source_sha256 != expected_sha256:
         raise ValueError("source SHA-256 does not match expected_sha256")
@@ -80,20 +86,23 @@ def prepare_patent_library(
     kept, removed_rows = _remove_sequence_duplicates(records)
     renamed_records = _rename_records(kept)
     _ensure_unique(kept)
+    vhh_records = [record for record in kept if record.kind == "VHH"]
+    if len(vhh_records) < benchmark_size:
+        raise ValueError(f"requested {benchmark_size} VHH records, found {len(vhh_records)}")
 
     for record in kept:
         worksheet.cell(record.row, 1).value = record.name
         worksheet.cell(record.row, 3).value = record.vh
         worksheet.cell(record.row, 4).value = record.vl
-    for row in sorted(removed_rows, reverse=True):
-        worksheet.delete_rows(row)
-    workbook.save(cleaned_path)
-
-    _write_csv(csv_path, kept)
-    vhh_records = [record for record in kept if record.kind == "VHH"]
-    if len(vhh_records) < benchmark_size:
-        raise ValueError(f"requested {benchmark_size} VHH records, found {len(vhh_records)}")
-    _write_benchmark(benchmark_path, vhh_records[:benchmark_size])
+    _delete_rows_preserving_links_and_dimensions(worksheet, removed_rows)
+    _write_outputs_transactionally(
+        workbook=workbook,
+        cleaned_path=cleaned_path,
+        csv_path=csv_path,
+        benchmark_path=benchmark_path,
+        records=kept,
+        benchmark_records=vhh_records[:benchmark_size],
+    )
 
     return PreparationSummary(
         source_records=len(records),
@@ -106,18 +115,34 @@ def prepare_patent_library(
     )
 
 
+def _validate_paths(
+    source_path: Path, cleaned_path: Path, csv_path: Path, benchmark_path: Path
+) -> tuple[Path, Path, Path, Path]:
+    paths = tuple(Path(path).resolve() for path in (source_path, cleaned_path, csv_path, benchmark_path))
+    if len(set(paths)) != len(paths):
+        raise ValueError("source, cleaned, csv, and benchmark paths must be different")
+    return paths
+
+
 def _read_records(worksheet) -> list[_Record]:
     records = []
     for row in range(2, worksheet.max_row + 1):
-        kind = _cell_text(worksheet.cell(row, 2).value)
-        vh_value = worksheet.cell(row, 3).value
-        if kind not in {"IgG", "VHH"} or not _cell_text(vh_value):
+        values = [worksheet.cell(row, column).value for column in range(1, worksheet.max_column + 1)]
+        if not _row_has_data(values):
             continue
         name = _cell_text(worksheet.cell(row, 1).value)
+        kind = _cell_text(worksheet.cell(row, 2).value)
+        vh_value = worksheet.cell(row, 3).value
+        vl_raw = _cell_text(worksheet.cell(row, 4).value)
+        if name.startswith("备注") and not kind and not _cell_text(vh_value) and not vl_raw:
+            continue
+        if kind not in {"IgG", "VHH"}:
+            raise ValueError(f"row {row}: type must be IgG or VHH")
+        if not _cell_text(vh_value):
+            raise ValueError(f"row {row}: VH is required")
         if not name:
             raise ValueError(f"row {row}: antibody name is required")
         vh = _normalise_sequence(vh_value, row, "VH")
-        vl_raw = _cell_text(worksheet.cell(row, 4).value)
         if kind == "IgG" and not vl_raw:
             raise ValueError(f"row {row}: IgG requires VL")
         if kind == "VHH" and vl_raw:
@@ -134,6 +159,10 @@ def _read_records(worksheet) -> list[_Record]:
             )
         )
     return records
+
+
+def _row_has_data(values: list[object | None]) -> bool:
+    return any(value is not None and (not isinstance(value, str) or value.strip()) for value in values)
 
 
 def _cell_text(value: object | None) -> str:
@@ -192,6 +221,40 @@ def _ensure_unique(records: list[_Record]) -> None:
         raise ValueError("cleaned VH/VL pairs are not unique")
 
 
+def _delete_rows_preserving_links_and_dimensions(worksheet, removed_rows: list[int]) -> None:
+    if not removed_rows:
+        return
+    removed = set(removed_rows)
+    hyperlinks = {
+        (cell.row, cell.column): copy(cell.hyperlink)
+        for row in worksheet.iter_rows()
+        for cell in row
+        if cell.row not in removed and cell.hyperlink is not None
+    }
+    dimensions = {
+        row: copy(dimension)
+        for row, dimension in worksheet.row_dimensions.items()
+        if row not in removed
+    }
+
+    for row in sorted(removed, reverse=True):
+        worksheet.delete_rows(row)
+    for row in worksheet.iter_rows():
+        for cell in row:
+            cell.hyperlink = None
+    for row in list(worksheet.row_dimensions):
+        del worksheet.row_dimensions[row]
+
+    def new_row(old_row: int) -> int:
+        return old_row - sum(deleted_row < old_row for deleted_row in removed)
+
+    for (old_row, column), hyperlink in hyperlinks.items():
+        worksheet.cell(new_row(old_row), column).hyperlink = hyperlink
+    for old_row, dimension in dimensions.items():
+        dimension.index = new_row(old_row)
+        worksheet.row_dimensions[dimension.index] = dimension
+
+
 def _write_csv(path: Path, records: list[_Record]) -> None:
     with Path(path).open("w", encoding="utf-8-sig", newline="") as file:
         writer = csv.writer(file)
@@ -224,6 +287,55 @@ def _write_benchmark(path: Path, records: list[_Record]) -> None:
             ]
         )
     workbook.save(path)
+
+
+def _write_outputs_transactionally(
+    *, workbook, cleaned_path: Path, csv_path: Path, benchmark_path: Path,
+    records: list[_Record], benchmark_records: list[_Record]
+) -> None:
+    targets = (cleaned_path, csv_path, benchmark_path)
+    temporary_paths: list[Path] = []
+    backup_paths: dict[Path, Path] = {}
+    published: list[Path] = []
+    try:
+        for target in targets:
+            descriptor, temporary_name = tempfile.mkstemp(
+                dir=target.parent, prefix=f".{target.name}.", suffix=target.suffix
+            )
+            os.close(descriptor)
+            temporary_paths.append(Path(temporary_name))
+        workbook.save(temporary_paths[0])
+        _write_csv(temporary_paths[1], records)
+        _write_benchmark(temporary_paths[2], benchmark_records)
+
+        for target in targets:
+            if target.exists():
+                descriptor, backup_name = tempfile.mkstemp(
+                    dir=target.parent, prefix=f".{target.name}.", suffix=".backup"
+                )
+                os.close(descriptor)
+                backup = Path(backup_name)
+                shutil.copy2(target, backup)
+                backup_paths[target] = backup
+        for target, temporary_path in zip(targets, temporary_paths):
+            os.replace(temporary_path, target)
+            published.append(target)
+    except Exception as error:
+        for target in reversed(published):
+            backup = backup_paths.get(target)
+            try:
+                if backup is not None:
+                    os.replace(backup, target)
+                else:
+                    target.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise RuntimeError("failed to publish prepared patent library outputs") from error
+    finally:
+        for path in temporary_paths:
+            path.unlink(missing_ok=True)
+        for path in backup_paths.values():
+            path.unlink(missing_ok=True)
 
 
 def _parse_args() -> argparse.Namespace:

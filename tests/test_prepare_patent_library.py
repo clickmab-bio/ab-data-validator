@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import codecs
 from hashlib import sha256
 from pathlib import Path
 
@@ -86,11 +87,13 @@ def test_prepare_patent_library_cleans_exports_and_preserves_workbook(tmp_path):
 
     with (tmp_path / "positive.csv").open(encoding="utf-8-sig", newline="") as file:
         csv_rows = list(csv.reader(file))
+    assert (tmp_path / "positive.csv").read_bytes().startswith(codecs.BOM_UTF8)
     assert csv_rows[0] == SOURCE_HEADERS
     assert csv_rows[1][0:4] == ["Repeat", "VHH", "ACDEF", ""]
     assert csv_rows[2][0:4] == ["Repeat-1", "VHH", "GHIK", ""]
     assert csv_rows[3][0:4] == ["FirstIgG", "IgG", "LMNPQ", "RSTVW"]
     assert len(csv_rows) == 4
+    assert all(len(row) == 9 for row in csv_rows)
 
     benchmark = load_workbook(tmp_path / "benchmark.xlsx")
     benchmark_rows = list(benchmark.active.iter_rows(values_only=True))
@@ -145,3 +148,112 @@ def test_prepare_patent_library_preserves_later_unique_name_during_renaming(tmp_
     assert names[2] == "A-1"
     assert len(names) == len(set(names))
     assert summary.renamed_records == 1
+
+
+def test_prepare_patent_library_preserves_hyperlinks_and_row_heights_after_deletion(tmp_path):
+    source = tmp_path / "source.xlsx"
+    workbook = Workbook()
+    library = workbook.active
+    library.title = "参考阳参抗体"
+    library.append(SOURCE_HEADERS)
+    library.append(["First", "VHH", "ACD", None, None, None, None, None, None])
+    library.append(["Duplicate", "VHH", "ACD", None, None, None, None, None, None])
+    library.append(["Linked", "VHH", "EFG", None, None, None, None, None, None])
+    library["A4"].hyperlink = "https://example.test/linked"
+    library.row_dimensions[4].height = 33
+    workbook.create_sheet("抗体提交格式")
+    workbook.save(source)
+
+    prepare_patent_library(
+        source_path=source,
+        cleaned_path=tmp_path / "cleaned.xlsx",
+        csv_path=tmp_path / "positive.csv",
+        benchmark_path=tmp_path / "benchmark.xlsx",
+        benchmark_size=2,
+    )
+
+    cleaned = load_workbook(tmp_path / "cleaned.xlsx")
+    linked = cleaned.worksheets[0]["A3"]
+    assert linked.value == "Linked"
+    assert linked.hyperlink.target == "https://example.test/linked"
+    assert linked.hyperlink.location is None
+    assert cleaned.worksheets[0].row_dimensions[3].height == 33
+
+
+def test_prepare_patent_library_keeps_existing_outputs_when_validation_fails(tmp_path):
+    source = tmp_path / "source.xlsx"
+    write_source(source)
+    targets = {
+        "cleaned": tmp_path / "cleaned.xlsx",
+        "csv": tmp_path / "positive.csv",
+        "benchmark": tmp_path / "benchmark.xlsx",
+    }
+    before = {name: f"old-{name}".encode() for name, path in targets.items()}
+    for name, path in targets.items():
+        path.write_bytes(before[name])
+
+    with pytest.raises(ValueError, match="VHH"):
+        prepare_patent_library(
+            source_path=source,
+            cleaned_path=targets["cleaned"],
+            csv_path=targets["csv"],
+            benchmark_path=targets["benchmark"],
+            benchmark_size=3,
+        )
+
+    assert {name: path.read_bytes() for name, path in targets.items()} == before
+
+
+@pytest.mark.parametrize("conflict", ["cleaned", "csv", "benchmark", "outputs"])
+def test_prepare_patent_library_rejects_conflicting_paths_without_changing_source(tmp_path, conflict):
+    source = tmp_path / "source.xlsx"
+    write_source(source)
+    cleaned = tmp_path / "cleaned.xlsx"
+    csv_path = tmp_path / "positive.csv"
+    benchmark = tmp_path / "benchmark.xlsx"
+    if conflict == "cleaned":
+        cleaned = source
+    elif conflict == "csv":
+        csv_path = source
+    elif conflict == "benchmark":
+        benchmark = source
+    else:
+        csv_path = cleaned
+    source_bytes = source.read_bytes()
+
+    with pytest.raises(ValueError, match="paths must be different"):
+        prepare_patent_library(
+            source_path=source,
+            cleaned_path=cleaned,
+            csv_path=csv_path,
+            benchmark_path=benchmark,
+            benchmark_size=2,
+        )
+
+    assert source.read_bytes() == source_bytes
+
+
+@pytest.mark.parametrize(
+    "row, message",
+    [
+        (["Bad", "Other", "ACD", None, None, None, None, None, None], "row 2"),
+        (["Missing", "VHH", None, None, None, None, None, None, None], "row 2"),
+    ],
+)
+def test_prepare_patent_library_rejects_invalid_data_rows(tmp_path, row, message):
+    source = tmp_path / "source.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.append(SOURCE_HEADERS)
+    worksheet.append(row)
+    workbook.create_sheet("抗体提交格式")
+    workbook.save(source)
+
+    with pytest.raises(ValueError, match=message):
+        prepare_patent_library(
+            source_path=source,
+            cleaned_path=tmp_path / "cleaned.xlsx",
+            csv_path=tmp_path / "positive.csv",
+            benchmark_path=tmp_path / "benchmark.xlsx",
+            benchmark_size=0,
+        )
