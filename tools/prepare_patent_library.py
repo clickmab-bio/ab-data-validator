@@ -297,13 +297,22 @@ def _write_outputs_transactionally(
     temporary_paths: list[Path] = []
     backup_paths: dict[Path, Path] = {}
     published: list[Path] = []
+    restored_backups: set[Path] = set()
+    retained_backups: set[Path] = set()
+    publish_completed = False
     try:
+        default_mode = _default_file_mode()
+        target_modes = {
+            target: _file_mode(target) if target.exists() else default_mode for target in targets
+        }
         for target in targets:
             descriptor, temporary_name = tempfile.mkstemp(
                 dir=target.parent, prefix=f".{target.name}.", suffix=target.suffix
             )
             os.close(descriptor)
-            temporary_paths.append(Path(temporary_name))
+            temporary_path = Path(temporary_name)
+            os.chmod(temporary_path, target_modes[target])
+            temporary_paths.append(temporary_path)
         workbook.save(temporary_paths[0])
         _write_csv(temporary_paths[1], records)
         _write_benchmark(temporary_paths[2], benchmark_records)
@@ -320,22 +329,54 @@ def _write_outputs_transactionally(
         for target, temporary_path in zip(targets, temporary_paths):
             os.replace(temporary_path, target)
             published.append(target)
+        publish_completed = True
     except Exception as error:
+        rollback_errors: list[tuple[Path, Path | None, OSError]] = []
         for target in reversed(published):
             backup = backup_paths.get(target)
             try:
                 if backup is not None:
                     os.replace(backup, target)
+                    restored_backups.add(backup)
                 else:
                     target.unlink(missing_ok=True)
-            except OSError:
-                pass
-        raise RuntimeError("failed to publish prepared patent library outputs") from error
+            except OSError as rollback_error:
+                if backup is not None:
+                    retained_backups.add(backup)
+                rollback_errors.append((target, backup, rollback_error))
+        if rollback_errors:
+            details = "; ".join(
+                f"target {target.resolve()}: rollback error {rollback_error}; "
+                f"backup retained at {backup.resolve() if backup is not None else 'none'}"
+                for target, backup, rollback_error in rollback_errors
+            )
+            raise RuntimeError(
+                "failed to publish prepared patent library outputs: "
+                f"publication error: {error}; {details}"
+            ) from error
+        raise RuntimeError(
+            "failed to publish prepared patent library outputs: "
+            f"publication error: {error}"
+        ) from error
     finally:
         for path in temporary_paths:
             path.unlink(missing_ok=True)
-        for path in backup_paths.values():
-            path.unlink(missing_ok=True)
+        for target, path in backup_paths.items():
+            if (
+                path not in retained_backups
+                and (publish_completed or path in restored_backups or target not in published)
+            ):
+                path.unlink(missing_ok=True)
+
+
+def _file_mode(path: Path) -> int:
+    return path.stat().st_mode & 0o777
+
+
+def _default_file_mode() -> int:
+    current_umask = os.umask(0)
+    os.umask(current_umask)
+    return 0o666 & ~current_umask
 
 
 def _parse_args() -> argparse.Namespace:

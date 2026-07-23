@@ -3,13 +3,16 @@ from __future__ import annotations
 import csv
 import codecs
 from hashlib import sha256
+import os
 from pathlib import Path
+import stat
 
 import pytest
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill
 
 from tools.prepare_patent_library import prepare_patent_library
+import tools.prepare_patent_library as preparation_module
 
 
 SOURCE_HEADERS = [
@@ -257,3 +260,104 @@ def test_prepare_patent_library_rejects_invalid_data_rows(tmp_path, row, message
             benchmark_path=tmp_path / "benchmark.xlsx",
             benchmark_size=0,
         )
+
+
+def _existing_targets(tmp_path: Path) -> tuple[dict[str, Path], dict[str, bytes]]:
+    targets = {
+        "cleaned": tmp_path / "cleaned.xlsx",
+        "csv": tmp_path / "positive.csv",
+        "benchmark": tmp_path / "benchmark.xlsx",
+    }
+    before = {name: f"old-{name}".encode() for name in targets}
+    for name, path in targets.items():
+        path.write_bytes(before[name])
+    return targets, before
+
+
+def test_prepare_patent_library_rolls_back_published_outputs_after_publish_failure(tmp_path, monkeypatch):
+    source = tmp_path / "source.xlsx"
+    write_source(source)
+    targets, before = _existing_targets(tmp_path)
+    original_replace = preparation_module.os.replace
+
+    def fail_second_publish(source_path, target_path):
+        if Path(target_path) == targets["csv"] and not str(source_path).endswith(".backup"):
+            raise OSError("publication failure")
+        return original_replace(source_path, target_path)
+
+    monkeypatch.setattr(preparation_module.os, "replace", fail_second_publish)
+
+    with pytest.raises(RuntimeError, match="publication failure"):
+        prepare_patent_library(
+            source_path=source,
+            cleaned_path=targets["cleaned"],
+            csv_path=targets["csv"],
+            benchmark_path=targets["benchmark"],
+            benchmark_size=2,
+        )
+
+    assert {name: path.read_bytes() for name, path in targets.items()} == before
+
+
+def test_prepare_patent_library_preserves_backup_when_rollback_fails(tmp_path, monkeypatch):
+    source = tmp_path / "source.xlsx"
+    write_source(source)
+    targets, before = _existing_targets(tmp_path)
+    original_replace = preparation_module.os.replace
+
+    def fail_publish_then_rollback(source_path, target_path):
+        source_path = Path(source_path)
+        target_path = Path(target_path)
+        if target_path == targets["csv"] and source_path.suffix != ".backup":
+            raise OSError("publication failure")
+        if target_path == targets["cleaned"] and source_path.suffix == ".backup":
+            raise OSError("rollback failure")
+        return original_replace(source_path, target_path)
+
+    monkeypatch.setattr(preparation_module.os, "replace", fail_publish_then_rollback)
+
+    with pytest.raises(RuntimeError, match="publication failure.*rollback failure") as error:
+        prepare_patent_library(
+            source_path=source,
+            cleaned_path=targets["cleaned"],
+            csv_path=targets["csv"],
+            benchmark_path=targets["benchmark"],
+            benchmark_size=2,
+        )
+
+    backups = list(tmp_path.glob(".cleaned.xlsx.*.backup"))
+    assert len(backups) == 1
+    assert str(backups[0].resolve()) in str(error.value)
+    assert backups[0].read_bytes() == before["cleaned"]
+    assert targets["csv"].read_bytes() == before["csv"]
+    assert targets["benchmark"].read_bytes() == before["benchmark"]
+
+
+def test_prepare_patent_library_preserves_existing_output_permissions(tmp_path):
+    source = tmp_path / "source.xlsx"
+    write_source(source)
+    targets, _ = _existing_targets(tmp_path)
+    for path in targets.values():
+        path.chmod(0o644)
+
+    prepare_patent_library(
+        source_path=source,
+        cleaned_path=targets["cleaned"],
+        csv_path=targets["csv"],
+        benchmark_path=targets["benchmark"],
+        benchmark_size=2,
+    )
+
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o644 for path in targets.values())
+
+
+def test_prepare_patent_library_uses_default_permissions_for_new_outputs(tmp_path):
+    source = tmp_path / "source.xlsx"
+    write_source(source)
+    previous_umask = os.umask(0)
+    os.umask(previous_umask)
+    expected_mode = 0o666 & ~previous_umask
+
+    run_preparation(tmp_path)
+
+    assert stat.S_IMODE((tmp_path / "cleaned.xlsx").stat().st_mode) == expected_mode
