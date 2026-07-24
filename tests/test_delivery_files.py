@@ -2,15 +2,13 @@ import csv
 from collections import Counter
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION_IMAGE = (
     "clickmab-hub.tencentcloudcr.com/public/"
     "ab-data-validator:v1.3"
-)
-LEGACY_IMAGE = (
-    "clickmab-hub.tencentcloudcr.com/public/"
-    "ab-data-validator:v1.2"
 )
 
 
@@ -63,8 +61,7 @@ def test_readme_documents_excel_only_parent_references_and_summary():
     assert "--input /data/examples/input.csv" not in readme
     assert "性能参考" in readme
     assert "16 核服务器" in readme
-    assert "50 条纳米抗体序列" in readme
-    assert "耗时大于 37 秒" in readme
+    assert "50 条 VHH" in readme
     assert "重链 `VH`" in readme
     assert "`>= 128`" in readme
     assert "轻链 `VL`" in readme
@@ -80,41 +77,51 @@ def test_quick_start_uses_published_v1_3_image():
 
     assert f"docker pull {PRODUCTION_IMAGE}" in quick_start
     assert PRODUCTION_IMAGE in quick_start
-    assert LEGACY_IMAGE not in quick_start
     assert "307 条阳参" in quick_start
     assert "examples/demo_failed_reasons.csv" in quick_start
 
 
-def test_readme_distinguishes_current_image_from_legacy_v1_2():
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-
-    assert "当前生产镜像 v1.3" in readme
-    assert "历史 v1.2" in readme
-    assert PRODUCTION_IMAGE in readme
-    assert LEGACY_IMAGE in readme
-    assert "v1.2 不包含当前 307 条阳参库" in readme
-
-
-def test_readme_documents_pairwise_production_and_muscle_fallback():
+def test_readme_documents_default_pairwise_performance():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert PRODUCTION_IMAGE in readme
-    assert LEGACY_IMAGE in readme
     assert "Pairwise 是默认生产比对后端" in readme
     assert "Biopython 1.87" in readme
     assert "BLOSUM62" in readme
     assert "`gap_open=11`" in readme
     assert "`gap_extend=1`" in readme
+    assert "默认一致性阈值 `0.8`" in readme
+    assert "`--workers 0`" in readme
+    assert "16 个逻辑 CPU" in readme
+    assert "50 条 VHH" in readme
+    assert "307 条内置阳参" in readme
+    assert "50,490 次" in readme
+    assert "35.85 秒" in readme
     assert "--aligner muscle" in readme
     assert "不会自动回退" in readme
-    assert "50,490" in readme
-    assert "33.574 秒" in readme
-    assert "721.451 秒" in readme
-    assert "21.49 倍" in readme
-    assert "v1.3 发布前已按相同 16 核方法复验通过" in readme
 
 
-def test_readme_documents_expanded_library_and_openclaw_benchmark():
+@pytest.mark.parametrize(
+    "historical_text",
+    [
+        "v1.2",
+        "119.497 秒",
+        "732.761 秒",
+        "6.132 倍",
+        "33.574 秒",
+        "721.451 秒",
+        "748.87 秒",
+        "21.49 倍",
+        "20.89 倍",
+    ],
+)
+def test_readme_omits_historical_benchmarks(historical_text):
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert historical_text not in readme
+
+
+def test_readme_documents_current_expanded_library():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "307 条阳性参考抗体序列" in readme
@@ -122,12 +129,6 @@ def test_readme_documents_expanded_library_and_openclaw_benchmark():
     assert "67 条 VHH" in readme
     assert "净新增 259 条" in readme
     assert "OpenClaw" in readme
-    assert "`--workers 16`" in readme
-    assert "三次正式运行" in readme
-    assert "中位数" in readme
-    assert "119.497 秒" in readme
-    assert "732.761 秒" in readme
-    assert "6.132 倍" in readme
 
 
 def test_examples_include_expected_report():
