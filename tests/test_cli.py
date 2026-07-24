@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+import ab_data_validator.cli as cli
 from ab_data_validator.alignment import AlignmentBackendError
 from ab_data_validator.cli import _build_parser, _format_progress_message, main
 from ab_data_validator.muscle import MuscleError
@@ -230,6 +231,56 @@ def test_cli_rejects_output_hard_linked_to_input_before_reading(tmp_path, capsys
 
     assert exit_code == 2
     assert "must be different" in capsys.readouterr().err
+
+
+def test_cli_keeps_early_canonical_output_when_parent_symlink_changes(
+    tmp_path, monkeypatch
+):
+    input_dir = tmp_path / "input"
+    reports = tmp_path / "reports"
+    input_dir.mkdir()
+    reports.mkdir()
+    input_path = input_dir / "input.xlsx"
+    write_input_xlsx(
+        input_path,
+        [[1, "Ab1", "ab_h", "n/a", 1, "优化改造", None, None]],
+    )
+    original_input = input_path.read_bytes()
+    output_parent = tmp_path / "output-parent"
+    output_parent.symlink_to(reports, target_is_directory=True)
+    requested_output = output_parent / "input.xlsx"
+    use_builtin_positive(monkeypatch, tmp_path)
+    real_load_input_file = cli.load_input_file
+
+    def load_then_retarget(path):
+        loaded = real_load_input_file(path)
+        output_parent.unlink()
+        output_parent.symlink_to(input_dir, target_is_directory=True)
+        return loaded
+
+    monkeypatch.setattr(cli, "load_input_file", load_then_retarget)
+
+    exit_code = main(
+        [
+            "validate",
+            "--input",
+            str(input_path),
+            "--output",
+            str(requested_output),
+        ],
+        numberer=FakeNumberer(
+            {"ab_h": make_chain(), "pos_h": make_chain()}
+        ),
+        aligner=FixedIdentityAligner(("AAAAAAAB", "AAAAAAAC")),
+    )
+
+    fixed_report = reports / "input.xlsx"
+    assert exit_code == 0
+    assert input_path.read_bytes() == original_input
+    assert fixed_report.is_file()
+    assert read_failure_rows(fixed_report)[0]["reason_type"] == (
+        "high_cdr_identity"
+    )
 
 
 def test_cli_constructs_and_logs_pairwise_default(tmp_path, capsys, monkeypatch):

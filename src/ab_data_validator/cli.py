@@ -11,7 +11,7 @@ from ab_data_validator.alignment import (
     AlignmentBackendError,
     DEFAULT_ALIGNER,
     SUPPORTED_ALIGNERS,
-    MuscleAligner,
+    MuscleAligner as MuscleAligner,
     create_production_aligner,
     describe_production_aligner,
 )
@@ -128,8 +128,11 @@ def _run_validate(
 ) -> int:
     progress_logger = _print_progress
     try:
-        output_path = args.output or default_output_path(args.input)
-        ensure_distinct_input_output(args.input, output_path)
+        requested_output = args.output or default_output_path(args.input)
+        output_path = ensure_distinct_input_output(
+            args.input,
+            requested_output,
+        )
         progress_logger(f"Loading input: {args.input}")
         loaded_input = load_input_file(args.input)
         progress_logger(

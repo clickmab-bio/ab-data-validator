@@ -15,6 +15,11 @@ def read_rows(path):
         return list(csv.DictReader(handle))
 
 
+def assert_no_temporary_reports(*directories):
+    for directory in directories:
+        assert list(directory.glob(".ab-report-*.tmp")) == []
+
+
 def test_writes_header_when_no_failures(tmp_path):
     path = tmp_path / "failed.csv"
 
@@ -104,6 +109,34 @@ def test_rejects_output_symlinked_to_input(tmp_path):
     assert type(error.value) is report.ReportPathError
 
 
+def test_distinct_path_check_returns_destination_with_fixed_canonical_parent(
+    tmp_path
+):
+    input_dir = tmp_path / "input"
+    reports = tmp_path / "reports"
+    input_dir.mkdir()
+    reports.mkdir()
+    input_path = input_dir / "input.xlsx"
+    original_input = b"original workbook"
+    input_path.write_bytes(original_input)
+    output_parent = tmp_path / "output-parent"
+    output_parent.symlink_to(reports, target_is_directory=True)
+    requested_output = output_parent / "input.xlsx"
+
+    fixed_output = report.ensure_distinct_input_output(
+        input_path,
+        requested_output,
+    )
+    output_parent.unlink()
+    output_parent.symlink_to(input_dir, target_is_directory=True)
+    write_failure_report(fixed_output, [])
+
+    assert fixed_output == reports / "input.xlsx"
+    assert input_path.read_bytes() == original_input
+    assert (reports / "input.xlsx").is_file()
+    assert_no_temporary_reports(input_dir, reports)
+
+
 def test_writes_report_by_replacing_temp_file_in_destination_directory(tmp_path, monkeypatch):
     path = tmp_path / "failed.csv"
     replace_calls = []
@@ -149,8 +182,7 @@ def test_resolves_destination_parent_once_before_symlink_retarget(
 
     assert (real_a / "failed.csv").is_file()
     assert not (real_b / "failed.csv").exists()
-    assert list(real_a.glob(".*.tmp")) == []
-    assert list(real_b.glob(".*.tmp")) == []
+    assert_no_temporary_reports(real_a, real_b)
 
 
 def test_keeps_old_report_when_replace_fails_and_removes_temp_file(tmp_path, monkeypatch):
@@ -167,7 +199,7 @@ def test_keeps_old_report_when_replace_fails_and_removes_temp_file(tmp_path, mon
         write_failure_report(path, [])
 
     assert path.read_bytes() == old_report
-    assert list(tmp_path.glob(".failed.csv.*.tmp")) == []
+    assert_no_temporary_reports(tmp_path)
 
 
 def test_keeps_old_report_when_failure_serialization_fails_and_removes_temp_file(
@@ -193,7 +225,7 @@ def test_keeps_old_report_when_failure_serialization_fails_and_removes_temp_file
         write_failure_report(path, [failure])
 
     assert path.read_bytes() == old_report
-    assert list(tmp_path.glob(".failed.csv.*.tmp")) == []
+    assert_no_temporary_reports(tmp_path)
 
 
 def test_new_report_is_readable_by_the_user_who_owns_the_output_directory(tmp_path):
@@ -266,4 +298,4 @@ def test_writes_report_with_legal_name_near_name_max(tmp_path):
     assert path.read_bytes() == (
         ",".join(FAILURE_REPORT_COLUMNS) + "\n"
     ).encode()
-    assert list(tmp_path.glob(".*.tmp")) == []
+    assert_no_temporary_reports(tmp_path)

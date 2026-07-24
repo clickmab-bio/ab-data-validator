@@ -31,15 +31,23 @@ class ReportPathError(ValueError):
 TEMPORARY_REPORT_ATTEMPTS = 16
 
 
-def ensure_distinct_input_output(input_path: str | Path, output_path: str | Path) -> None:
+def ensure_distinct_input_output(
+    input_path: str | Path,
+    output_path: str | Path,
+) -> Path:
     source = Path(input_path)
     destination = Path(output_path)
+    resolved_parent = destination.parent.resolve(strict=True)
+    fixed_destination = resolved_parent / destination.name
     try:
-        same_file = source.samefile(destination)
+        same_file = source.samefile(fixed_destination)
     except FileNotFoundError:
-        same_file = source.resolve(strict=False) == destination.resolve(strict=False)
+        same_file = (
+            source.resolve(strict=False) == fixed_destination
+        )
     if same_file:
         raise ReportPathError("input and output paths must be different")
+    return fixed_destination
 
 
 def write_failure_report(path: str | Path, failures: list[ValidationFailure]) -> None:
