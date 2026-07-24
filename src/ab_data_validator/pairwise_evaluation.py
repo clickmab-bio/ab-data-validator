@@ -68,6 +68,25 @@ class _ConfigurationStatistics:
     truncated_count: int = 0
 
 
+@dataclass(frozen=True)
+class _ConfigurationSnapshot:
+    config: PairwiseConfig
+    config_order: int
+    absolute_errors: tuple[float, ...]
+    comparison_count: int
+    threshold_disagreement_count: int
+    false_negative_count: int
+    threshold_ambiguous_count: int
+    multi_optimal_count: int
+    truncated_count: int
+
+
+@dataclass(frozen=True)
+class _EvaluationSnapshot:
+    configurations: tuple[_ConfigurationSnapshot, ...]
+    differences: tuple[DifferenceRecord, ...]
+
+
 class ShadowEvaluator:
     def __init__(
         self,
@@ -259,87 +278,109 @@ class ShadowEvaluator:
                 if difference is not None:
                     self._differences.append(difference)
 
-    def _configuration_outcomes(self) -> list[dict[str, object]]:
+    def _snapshot(self) -> _EvaluationSnapshot:
         with self._lock:
-            snapshots = [
-                (
-                    config,
-                    self._config_order[config.key],
-                    tuple(self._statistics[config.key].absolute_errors),
-                    self._statistics[config.key].comparison_count,
-                    self._statistics[
-                        config.key
-                    ].threshold_disagreement_count,
-                    self._statistics[config.key].false_negative_count,
-                    self._statistics[
-                        config.key
-                    ].threshold_ambiguous_count,
-                    self._statistics[config.key].multi_optimal_count,
-                    self._statistics[config.key].truncated_count,
-                )
-                for config in self.configs
-            ]
+            return _EvaluationSnapshot(
+                configurations=tuple(
+                    _ConfigurationSnapshot(
+                        config=config,
+                        config_order=self._config_order[config.key],
+                        absolute_errors=tuple(
+                            self._statistics[config.key].absolute_errors
+                        ),
+                        comparison_count=self._statistics[
+                            config.key
+                        ].comparison_count,
+                        threshold_disagreement_count=self._statistics[
+                            config.key
+                        ].threshold_disagreement_count,
+                        false_negative_count=self._statistics[
+                            config.key
+                        ].false_negative_count,
+                        threshold_ambiguous_count=self._statistics[
+                            config.key
+                        ].threshold_ambiguous_count,
+                        multi_optimal_count=self._statistics[
+                            config.key
+                        ].multi_optimal_count,
+                        truncated_count=self._statistics[
+                            config.key
+                        ].truncated_count,
+                    )
+                    for config in self.configs
+                ),
+                differences=tuple(self._differences),
+            )
 
+    @staticmethod
+    def _configuration_outcomes(
+        snapshot: _EvaluationSnapshot,
+    ) -> list[dict[str, object]]:
         outcomes: list[dict[str, object]] = []
-        for (
-            config,
-            config_order,
-            errors,
-            comparison_count,
-            threshold_disagreement_count,
-            false_negative_count,
-            threshold_ambiguous_count,
-            multi_optimal_count,
-            truncated_count,
-        ) in snapshots:
-            total_absolute_error = fsum(sorted(errors))
+        for statistics in snapshot.configurations:
+            total_absolute_error = fsum(
+                sorted(statistics.absolute_errors)
+            )
             mean_absolute_error = (
-                total_absolute_error / comparison_count
-                if comparison_count
+                total_absolute_error / statistics.comparison_count
+                if statistics.comparison_count
                 else 0.0
             )
-            max_absolute_error = max(errors, default=0.0)
+            max_absolute_error = max(
+                statistics.absolute_errors,
+                default=0.0,
+            )
             gate_passed = (
-                threshold_disagreement_count == 0
-                and false_negative_count == 0
-                and threshold_ambiguous_count == 0
-                and truncated_count == 0
+                statistics.threshold_disagreement_count == 0
+                and statistics.false_negative_count == 0
+                and statistics.threshold_ambiguous_count == 0
+                and statistics.truncated_count == 0
             )
             outcomes.append(
                 {
-                    "config_key": config.key,
-                    "matrix": config.matrix,
-                    "gap_open": config.gap_open,
-                    "gap_extend": config.gap_extend,
-                    "config_order": config_order,
-                    "comparison_count": comparison_count,
+                    "config_key": statistics.config.key,
+                    "matrix": statistics.config.matrix,
+                    "gap_open": statistics.config.gap_open,
+                    "gap_extend": statistics.config.gap_extend,
+                    "config_order": statistics.config_order,
+                    "comparison_count": statistics.comparison_count,
                     "total_absolute_error": total_absolute_error,
                     "mean_absolute_error": mean_absolute_error,
                     "max_absolute_error": max_absolute_error,
                     "threshold_disagreement_count": (
-                        threshold_disagreement_count
+                        statistics.threshold_disagreement_count
                     ),
-                    "false_negative_count": false_negative_count,
-                    "threshold_ambiguous_count": threshold_ambiguous_count,
-                    "multi_optimal_count": multi_optimal_count,
-                    "truncated_count": truncated_count,
+                    "false_negative_count": (
+                        statistics.false_negative_count
+                    ),
+                    "threshold_ambiguous_count": (
+                        statistics.threshold_ambiguous_count
+                    ),
+                    "multi_optimal_count": statistics.multi_optimal_count,
+                    "truncated_count": statistics.truncated_count,
                     "gate_passed": gate_passed,
                 }
             )
         return outcomes
 
-    def summary(self) -> dict[str, object]:
+    def _summary_from_snapshot(
+        self,
+        snapshot: _EvaluationSnapshot,
+    ) -> dict[str, object]:
         return {
             "threshold": self.threshold,
             "max_optimal_alignments": self.max_optimal_alignments,
-            "configurations": self._configuration_outcomes(),
+            "configurations": self._configuration_outcomes(snapshot),
         }
+
+    def summary(self) -> dict[str, object]:
+        return self._summary_from_snapshot(self._snapshot())
 
     def best_passing_config(self) -> PairwiseConfig | None:
         passing_outcomes = [
             outcome
-            for outcome in self._configuration_outcomes()
-            if outcome["gate_passed"]
+            for outcome in self._configuration_outcomes(self._snapshot())
+            if outcome["gate_passed"] and outcome["comparison_count"] > 0
         ]
         if not passing_outcomes:
             return None
@@ -356,9 +397,10 @@ class ShadowEvaluator:
         return self.configs[int(best["config_order"])]
 
     def write(self, output_dir: Path) -> None:
+        snapshot = self._snapshot()
         output_dir.mkdir(parents=True, exist_ok=True)
         summary_text = json.dumps(
-            self.summary(),
+            self._summary_from_snapshot(snapshot),
             ensure_ascii=False,
             indent=2,
             sort_keys=True,
@@ -368,16 +410,15 @@ class ShadowEvaluator:
             encoding="utf-8",
         )
 
-        with self._lock:
-            differences = sorted(
-                self._differences,
-                key=lambda record: (
-                    record.candidate_name,
-                    record.positive_name,
-                    record.cdr_name,
-                    record.config_key,
-                ),
-            )
+        differences = sorted(
+            snapshot.differences,
+            key=lambda record: (
+                record.candidate_name,
+                record.positive_name,
+                record.cdr_name,
+                record.config_key,
+            ),
+        )
         field_names = [field.name for field in fields(DifferenceRecord)]
         with (output_dir / "differences.csv").open(
             "w",

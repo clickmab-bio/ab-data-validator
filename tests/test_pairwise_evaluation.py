@@ -161,6 +161,20 @@ def test_shadow_evaluator_records_threshold_difference_and_false_negative(
     assert evaluator.best_passing_config() is None
 
 
+def test_empty_evaluator_keeps_gate_formula_but_has_no_best_config() -> None:
+    evaluator = ShadowEvaluator(
+        configs=DEFAULT_CONFIGS[:1],
+        threshold=0.8,
+        max_optimal_alignments=1000,
+    )
+
+    outcome = evaluator.summary()["configurations"][0]
+
+    assert outcome["comparison_count"] == 0
+    assert outcome["gate_passed"] is True
+    assert evaluator.best_passing_config() is None
+
+
 def test_multi_optimal_truncated_and_ambiguous_are_counted(monkeypatch) -> None:
     evaluator = ShadowEvaluator(
         configs=DEFAULT_CONFIGS[:1],
@@ -243,6 +257,32 @@ def test_best_passing_config_uses_smallest_maximum_error(monkeypatch) -> None:
     assert evaluator.best_passing_config() == configs[1]
 
 
+def test_best_passing_config_ignores_configs_without_comparisons(
+    monkeypatch,
+) -> None:
+    configs = DEFAULT_CONFIGS[:2]
+    evaluator = ShadowEvaluator(
+        configs=configs,
+        threshold=0.8,
+        max_optimal_alignments=1000,
+    )
+    identities = {configs[0].key: 0.9, configs[1].key: 0.89}
+    monkeypatch.setattr(
+        evaluator,
+        "_observe",
+        lambda config, candidate_cdr, positive_cdr: _observation(
+            identity=identities[config.key]
+        ),
+    )
+    evaluator.observe(_comparison(), ("ARDY-", "ARDYG"), 0.9)
+    with evaluator._lock:
+        empty_statistics = evaluator._statistics[configs[0].key]
+        empty_statistics.comparison_count = 0
+        empty_statistics.absolute_errors.clear()
+
+    assert evaluator.best_passing_config() == configs[1]
+
+
 def test_summary_preserves_config_order(monkeypatch) -> None:
     configs = (DEFAULT_CONFIGS[3], DEFAULT_CONFIGS[0], DEFAULT_CONFIGS[9])
     evaluator = ShadowEvaluator(
@@ -307,6 +347,58 @@ def test_shadow_output_is_stably_sorted_and_parseable(tmp_path, monkeypatch) -> 
     evaluator.write(tmp_path)
     assert (tmp_path / "summary.json").read_text(encoding="utf-8") == first_summary
     assert (tmp_path / "differences.csv").read_text(encoding="utf-8") == first_csv
+
+
+def test_write_uses_one_snapshot_for_summary_and_differences(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    evaluator = ShadowEvaluator(
+        configs=DEFAULT_CONFIGS[:1],
+        threshold=0.8,
+        max_optimal_alignments=1000,
+    )
+    monkeypatch.setattr(
+        evaluator,
+        "_observe",
+        lambda config, candidate_cdr, positive_cdr: _observation(identity=0.75),
+    )
+    evaluator.observe(
+        _comparison(candidate_name="BeforeSnapshot"),
+        ("ARDY-", "ARDYG"),
+        1.0,
+    )
+    original_snapshot = evaluator._snapshot
+    snapshot_taken = threading.Event()
+    finish_write = threading.Event()
+
+    def controlled_snapshot():
+        snapshot = original_snapshot()
+        snapshot_taken.set()
+        assert finish_write.wait(timeout=5)
+        return snapshot
+
+    monkeypatch.setattr(evaluator, "_snapshot", controlled_snapshot)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        write_future = executor.submit(evaluator.write, tmp_path)
+        assert snapshot_taken.wait(timeout=5)
+        evaluator.observe(
+            _comparison(candidate_name="AfterSnapshot"),
+            ("ARDY-", "ARDYG"),
+            1.0,
+        )
+        finish_write.set()
+        write_future.result(timeout=5)
+
+    payload = json.loads(
+        (tmp_path / "summary.json").read_text(encoding="utf-8")
+    )
+    with (tmp_path / "differences.csv").open(
+        encoding="utf-8", newline=""
+    ) as handle:
+        rows = list(csv.DictReader(handle))
+    assert payload["configurations"][0]["comparison_count"] == 1
+    assert [row["candidate_name"] for row in rows] == ["BeforeSnapshot"]
 
 
 def test_any_nonzero_float_difference_creates_difference_record(
