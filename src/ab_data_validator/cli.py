@@ -23,7 +23,7 @@ from ab_data_validator.parallel import resolve_worker_count
 from ab_data_validator.positive_library import PositiveLibraryError, load_positive_library
 from ab_data_validator.report import (
     ReportPathError,
-    ensure_distinct_input_output,
+    prepare_report_destination,
     write_failure_report,
 )
 from ab_data_validator.summary import format_validation_summary
@@ -129,50 +129,74 @@ def _run_validate(
     progress_logger = _print_progress
     try:
         requested_output = args.output or default_output_path(args.input)
-        output_path = ensure_distinct_input_output(
+        with prepare_report_destination(
             args.input,
             requested_output,
-        )
-        progress_logger(f"Loading input: {args.input}")
-        loaded_input = load_input_file(args.input)
-        progress_logger(
-            f"Loaded {len(loaded_input.candidates)} candidates and "
-            f"{len(loaded_input.parent_references)} parent references"
-        )
-        with resources.as_file(get_builtin_positive_csv_path()) as positive_path:
-            builtin_positives = load_positive_library(positive_path)
-            progress_logger(f"Loaded {len(builtin_positives)} built-in positive references")
-            positives = builtin_positives + loaded_input.parent_references
-            effective_muscle_bin = args.muscle_bin or "muscle"
-            if aligner is None:
-                selected_aligner = create_production_aligner(
-                    args.aligner,
-                    muscle_bin=effective_muscle_bin,
-                )
+        ) as output_destination:
+            progress_logger(f"Loading input: {args.input}")
+            loaded_input = load_input_file(args.input)
+            progress_logger(
+                f"Loaded {len(loaded_input.candidates)} candidates and "
+                f"{len(loaded_input.parent_references)} parent references"
+            )
+            with resources.as_file(
+                get_builtin_positive_csv_path()
+            ) as positive_path:
+                builtin_positives = load_positive_library(positive_path)
                 progress_logger(
-                    "Using "
-                    + describe_production_aligner(
+                    f"Loaded {len(builtin_positives)} "
+                    "built-in positive references"
+                )
+                positives = (
+                    builtin_positives
+                    + loaded_input.parent_references
+                )
+                effective_muscle_bin = args.muscle_bin or "muscle"
+                if aligner is None:
+                    selected_aligner = create_production_aligner(
                         args.aligner,
                         muscle_bin=effective_muscle_bin,
                     )
+                    progress_logger(
+                        "Using "
+                        + describe_production_aligner(
+                            args.aligner,
+                            muscle_bin=effective_muscle_bin,
+                        )
+                    )
+                else:
+                    selected_aligner = aligner
+                    progress_logger("Using injected aligner")
+                progress_logger(
+                    "Using identity threshold "
+                    f"{args.identity_threshold:g}"
                 )
-            else:
-                selected_aligner = aligner
-                progress_logger("Using injected aligner")
-            progress_logger(f"Using identity threshold {args.identity_threshold:g}")
-            max_workers = resolve_worker_count(args.workers)
-            progress_logger(f"Using {max_workers} worker(s)")
-            validator = Validator(
-                numberer=numberer or AnarciNumberer(anarci_bin=args.anarci_bin),
-                aligner=selected_aligner,
-                identity_threshold=args.identity_threshold,
-                max_workers=max_workers,
-                progress_logger=progress_logger,
+                max_workers = resolve_worker_count(args.workers)
+                progress_logger(f"Using {max_workers} worker(s)")
+                validator = Validator(
+                    numberer=numberer
+                    or AnarciNumberer(anarci_bin=args.anarci_bin),
+                    aligner=selected_aligner,
+                    identity_threshold=args.identity_threshold,
+                    max_workers=max_workers,
+                    progress_logger=progress_logger,
+                )
+                failures = validator.validate(
+                    loaded_input.candidates,
+                    positives,
+                )
+            progress_logger(
+                "Writing failure report: "
+                f"{output_destination.display_path}"
             )
-            failures = validator.validate(loaded_input.candidates, positives)
-        progress_logger(f"Writing failure report: {output_path}")
-        write_failure_report(output_path, failures)
-        print(format_validation_summary(loaded_input.candidates, failures, output_path))
+            write_failure_report(output_destination, failures)
+            print(
+                format_validation_summary(
+                    loaded_input.candidates,
+                    failures,
+                    output_destination.display_path,
+                )
+            )
     except (
         InputLoadError,
         AlignmentBackendError,

@@ -33,7 +33,10 @@ from ab_data_validator.positive_library import (
     PositiveLibraryError,
     load_positive_library,
 )
-from ab_data_validator.report import write_failure_report
+from ab_data_validator.report import (
+    prepare_report_destination,
+    write_failure_report,
+)
 from ab_data_validator.validation import (
     IdentityComparison,
     PositiveReferenceError,
@@ -724,20 +727,30 @@ def run_validate(
     numberer_factory: NumbererFactory | None = None,
     validator_factory: ValidatorFactory | None = None,
 ) -> None:
-    selected_runtime = runtime or load_pairwise_runtime()
-    config = _load_configuration(args, selected_runtime)
-    loaded, positives = load_records(args.input, args.positive_csv)
-    make_numberer = numberer_factory or AnarciNumberer
-    make_validator = validator_factory or _ContextualValidator
-    validator = make_validator(
-        numberer=make_numberer(anarci_bin=args.anarci_bin),
-        aligner=selected_runtime.BiopythonGlobalAligner(config),
-        identity_threshold=args.threshold,
-        max_workers=args.workers,
-    )
-    failures = validator.validate(loaded.candidates, positives)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    write_failure_report(args.output, failures)
+    with prepare_report_destination(
+        args.input,
+        args.output,
+    ) as output_destination:
+        selected_runtime = runtime or load_pairwise_runtime()
+        config = _load_configuration(args, selected_runtime)
+        loaded, positives = load_records(
+            args.input,
+            args.positive_csv,
+        )
+        make_numberer = numberer_factory or AnarciNumberer
+        make_validator = validator_factory or _ContextualValidator
+        validator = make_validator(
+            numberer=make_numberer(anarci_bin=args.anarci_bin),
+            aligner=selected_runtime.BiopythonGlobalAligner(config),
+            identity_threshold=args.threshold,
+            max_workers=args.workers,
+        )
+        failures = validator.validate(
+            loaded.candidates,
+            positives,
+        )
+        write_failure_report(output_destination, failures)
 
 
 def _print_error(error: BaseException) -> None:
@@ -751,11 +764,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        runtime = load_pairwise_runtime()
         if args.command == "shadow":
+            runtime = load_pairwise_runtime()
             run_shadow(args, runtime=runtime)
         else:
-            run_validate(args, runtime=runtime)
+            run_validate(args)
     except (
         EvaluationToolError,
         InputLoadError,

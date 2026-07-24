@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from ab_data_validator.models import InputType
+from ab_data_validator.report import ReportPathError
 from ab_data_validator.validation import IdentityComparison
 from tests.xlsx_utils import write_xlsx
 from tools import evaluate_biopython_pairwise as tool
@@ -1539,6 +1540,133 @@ def test_validate_uses_pairwise_aligner_and_existing_failure_writer(
     assert list(csv.DictReader(output_path.open(encoding="utf-8"))) == []
 
 
+@pytest.mark.parametrize("alias_kind", ["same", "hardlink", "symlink"])
+def test_validate_rejects_input_output_collision_before_runtime(
+    tmp_path,
+    monkeypatch,
+    alias_kind,
+):
+    input_path = tmp_path / "input.xlsx"
+    input_path.write_bytes(b"input")
+    output_path = (
+        input_path if alias_kind == "same" else tmp_path / "failed.csv"
+    )
+    if alias_kind == "hardlink":
+        output_path.hardlink_to(input_path)
+    elif alias_kind == "symlink":
+        output_path.symlink_to(input_path)
+    args = parse(
+        "validate",
+        "--input",
+        str(input_path),
+        "--output",
+        str(output_path),
+        "--matrix",
+        "BLOSUM62",
+        "--gap-open",
+        "11",
+        "--gap-extend",
+        "1",
+    )
+
+    def fail_if_runtime_starts():
+        raise AssertionError("runtime must not start")
+
+    monkeypatch.setattr(
+        tool,
+        "load_pairwise_runtime",
+        fail_if_runtime_starts,
+    )
+
+    with pytest.raises(ReportPathError, match="must be different"):
+        tool.run_validate(args)
+
+
+def test_validate_main_rejects_collision_before_runtime(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    input_path = tmp_path / "input.xlsx"
+    input_path.write_bytes(b"input")
+
+    def fail_if_runtime_starts():
+        raise AssertionError("runtime must not start")
+
+    monkeypatch.setattr(
+        tool,
+        "load_pairwise_runtime",
+        fail_if_runtime_starts,
+    )
+
+    exit_code = tool.main(
+        [
+            "validate",
+            "--input",
+            str(input_path),
+            "--output",
+            str(input_path),
+            "--matrix",
+            "BLOSUM62",
+            "--gap-open",
+            "11",
+            "--gap-extend",
+            "1",
+        ]
+    )
+
+    assert exit_code == 2
+    assert "must be different" in capsys.readouterr().err
+
+
+def test_validate_keeps_open_output_directory_when_parent_is_replaced(
+    tmp_path,
+):
+    input_dir = tmp_path / "input"
+    reports = tmp_path / "reports"
+    moved_reports = tmp_path / "reports-moved"
+    input_dir.mkdir()
+    reports.mkdir()
+    input_path = input_dir / "input.xlsx"
+    positive_path = tmp_path / "positive.csv"
+    output_path = reports / "input.xlsx"
+    write_input(input_path)
+    original_input = input_path.read_bytes()
+    write_positive(positive_path)
+
+    class ParentReplacingValidator(RecordingValidator):
+        def validate(self, candidates, positives):
+            reports.rename(moved_reports)
+            reports.symlink_to(input_dir, target_is_directory=True)
+            return super().validate(candidates, positives)
+
+    args = parse(
+        "validate",
+        "--input",
+        str(input_path),
+        "--positive-csv",
+        str(positive_path),
+        "--output",
+        str(output_path),
+        "--matrix",
+        "BLOSUM62",
+        "--gap-open",
+        "11",
+        "--gap-extend",
+        "1",
+    )
+
+    tool.run_validate(
+        args,
+        runtime=fake_runtime(),
+        numberer_factory=FakeNumberer,
+        validator_factory=ParentReplacingValidator,
+    )
+
+    assert input_path.read_bytes() == original_input
+    assert (moved_reports / "input.xlsx").is_file()
+
+
 def test_validate_reads_selected_configuration_json(tmp_path, monkeypatch):
     input_path = tmp_path / "input.xlsx"
     positive_path = tmp_path / "positive.csv"
@@ -1727,6 +1855,7 @@ def test_shadow_repeated_runs_write_identical_json_bytes(tmp_path, monkeypatch):
 @pytest.mark.parametrize("command", ["shadow", "validate"])
 def test_main_reports_optional_dependency_install_hint(
     command,
+    tmp_path,
     monkeypatch,
     capsys,
 ):
@@ -1734,16 +1863,20 @@ def test_main_reports_optional_dependency_install_hint(
         raise tool.OptionalDependencyError("missing")
 
     monkeypatch.setattr(tool, "load_pairwise_runtime", missing_runtime)
+    input_path = tmp_path / "benchmark.xlsx"
+    input_path.write_bytes(b"input")
 
     arguments = [
         command,
         "--input",
-        "benchmark.xlsx",
+        str(input_path),
         "--output-dir" if command == "shadow" else "--output",
-        "output",
+        str(tmp_path / "output"),
     ]
     if command == "validate":
-        arguments.extend(["--config-json", "selected.json"])
+        arguments.extend(
+            ["--config-json", str(tmp_path / "selected.json")]
+        )
 
     exit_code = tool.main(arguments)
 

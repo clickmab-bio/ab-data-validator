@@ -1,4 +1,5 @@
 import csv
+import errno
 import os
 import stat
 from pathlib import Path
@@ -18,6 +19,12 @@ def read_rows(path):
 def assert_no_temporary_reports(*directories):
     for directory in directories:
         assert list(directory.glob(".ab-report-*.tmp")) == []
+
+
+def assert_file_descriptor_closed(file_descriptor):
+    with pytest.raises(OSError) as error:
+        os.fstat(file_descriptor)
+    assert error.value.errno == errno.EBADF
 
 
 def test_writes_header_when_no_failures(tmp_path):
@@ -80,7 +87,7 @@ def test_rejects_input_and_output_at_same_path(tmp_path):
     input_path.write_bytes(b"original workbook")
 
     with pytest.raises(ValueError, match="must be different") as error:
-        report.ensure_distinct_input_output(input_path, input_path)
+        report.prepare_report_destination(input_path, input_path)
 
     assert type(error.value) is report.ReportPathError
 
@@ -92,7 +99,7 @@ def test_rejects_output_hard_linked_to_input(tmp_path):
     output_path.hardlink_to(input_path)
 
     with pytest.raises(ValueError, match="must be different") as error:
-        report.ensure_distinct_input_output(input_path, output_path)
+        report.prepare_report_destination(input_path, output_path)
 
     assert type(error.value) is report.ReportPathError
 
@@ -104,12 +111,12 @@ def test_rejects_output_symlinked_to_input(tmp_path):
     output_path.symlink_to(input_path)
 
     with pytest.raises(ValueError, match="must be different") as error:
-        report.ensure_distinct_input_output(input_path, output_path)
+        report.prepare_report_destination(input_path, output_path)
 
     assert type(error.value) is report.ReportPathError
 
 
-def test_distinct_path_check_returns_destination_with_fixed_canonical_parent(
+def test_prepared_destination_keeps_fixed_canonical_parent(
     tmp_path
 ):
     input_dir = tmp_path / "input"
@@ -123,15 +130,16 @@ def test_distinct_path_check_returns_destination_with_fixed_canonical_parent(
     output_parent.symlink_to(reports, target_is_directory=True)
     requested_output = output_parent / "input.xlsx"
 
-    fixed_output = report.ensure_distinct_input_output(
+    prepared = report.prepare_report_destination(
         input_path,
         requested_output,
     )
-    output_parent.unlink()
-    output_parent.symlink_to(input_dir, target_is_directory=True)
-    write_failure_report(fixed_output, [])
+    with prepared as destination:
+        output_parent.unlink()
+        output_parent.symlink_to(input_dir, target_is_directory=True)
+        write_failure_report(destination, [])
 
-    assert fixed_output == reports / "input.xlsx"
+    assert prepared.path == reports / "input.xlsx"
     assert input_path.read_bytes() == original_input
     assert (reports / "input.xlsx").is_file()
     assert_no_temporary_reports(input_dir, reports)
@@ -142,9 +150,9 @@ def test_writes_report_by_replacing_temp_file_in_destination_directory(tmp_path,
     replace_calls = []
     real_replace = os.replace
 
-    def recording_replace(source, destination):
-        replace_calls.append((source, destination))
-        real_replace(source, destination)
+    def recording_replace(source, destination, **kwargs):
+        replace_calls.append((source, destination, kwargs))
+        real_replace(source, destination, **kwargs)
 
     monkeypatch.setattr(report, "replace_file", recording_replace)
 
@@ -152,45 +160,62 @@ def test_writes_report_by_replacing_temp_file_in_destination_directory(tmp_path,
 
     assert path.read_bytes() == (",".join(FAILURE_REPORT_COLUMNS) + "\n").encode()
     assert len(replace_calls) == 1
-    temporary_path, destination = replace_calls[0]
-    assert destination == path
-    assert temporary_path.parent == path.parent
-    assert temporary_path.name.startswith(".ab-report-")
-    assert temporary_path.name.endswith(".tmp")
+    temporary_name, destination_name, replace_options = replace_calls[0]
+    assert destination_name == path.name
+    assert temporary_name.startswith(".ab-report-")
+    assert temporary_name.endswith(".tmp")
+    assert replace_options["src_dir_fd"] == replace_options["dst_dir_fd"]
 
 
-def test_resolves_destination_parent_once_before_symlink_retarget(
+def test_writer_uses_directory_fd_when_parent_is_replaced_after_temp_creation(
     tmp_path, monkeypatch
 ):
-    real_a = tmp_path / "real-a"
-    real_b = tmp_path / "real-b"
-    real_a.mkdir()
-    real_b.mkdir()
-    parent_link = tmp_path / "report-parent"
-    parent_link.symlink_to(real_a, target_is_directory=True)
-    path = parent_link / "failed.csv"
+    report_parent = tmp_path / "reports"
+    moved_parent = tmp_path / "reports-moved"
+    replacement_target = tmp_path / "replacement-target"
+    report_parent.mkdir()
+    replacement_target.mkdir()
+    path = report_parent / "failed.csv"
     real_replace = os.replace
 
-    def retargeting_replace(source, destination):
-        parent_link.unlink()
-        parent_link.symlink_to(real_b, target_is_directory=True)
-        real_replace(source, destination)
+    def replacing_parent_then_replace(source, destination, **kwargs):
+        report_parent.rename(moved_parent)
+        report_parent.symlink_to(
+            replacement_target,
+            target_is_directory=True,
+        )
+        real_replace(source, destination, **kwargs)
 
-    monkeypatch.setattr(report, "replace_file", retargeting_replace)
+    monkeypatch.setattr(
+        report,
+        "replace_file",
+        replacing_parent_then_replace,
+    )
 
     write_failure_report(path, [])
 
-    assert (real_a / "failed.csv").is_file()
-    assert not (real_b / "failed.csv").exists()
-    assert_no_temporary_reports(real_a, real_b)
+    assert (moved_parent / "failed.csv").is_file()
+    assert not (replacement_target / "failed.csv").exists()
+    assert_no_temporary_reports(moved_parent, replacement_target)
 
 
 def test_keeps_old_report_when_replace_fails_and_removes_temp_file(tmp_path, monkeypatch):
-    path = tmp_path / "failed.csv"
+    report_parent = tmp_path / "reports"
+    moved_parent = tmp_path / "reports-moved"
+    replacement_target = tmp_path / "replacement-target"
+    report_parent.mkdir()
+    replacement_target.mkdir()
+    path = report_parent / "failed.csv"
     old_report = b"previous report\n"
     path.write_bytes(old_report)
 
-    def fail_replace(source, destination):
+    def fail_replace(source, destination, **kwargs):
+        del source, destination, kwargs
+        report_parent.rename(moved_parent)
+        report_parent.symlink_to(
+            replacement_target,
+            target_is_directory=True,
+        )
         raise OSError("replace blocked")
 
     monkeypatch.setattr(report, "replace_file", fail_replace)
@@ -198,8 +223,8 @@ def test_keeps_old_report_when_replace_fails_and_removes_temp_file(tmp_path, mon
     with pytest.raises(OSError, match="replace blocked"):
         write_failure_report(path, [])
 
-    assert path.read_bytes() == old_report
-    assert_no_temporary_reports(tmp_path)
+    assert (moved_parent / "failed.csv").read_bytes() == old_report
+    assert_no_temporary_reports(moved_parent, replacement_target)
 
 
 def test_keeps_old_report_when_failure_serialization_fails_and_removes_temp_file(
@@ -231,7 +256,11 @@ def test_keeps_old_report_when_failure_serialization_fails_and_removes_temp_file
 def test_new_report_is_readable_by_the_user_who_owns_the_output_directory(tmp_path):
     path = tmp_path / "failed.csv"
 
-    write_failure_report(path, [])
+    previous_umask = os.umask(0o022)
+    try:
+        write_failure_report(path, [])
+    finally:
+        os.umask(previous_umask)
 
     assert stat.S_IMODE(path.stat().st_mode) == 0o644
 
@@ -299,3 +328,77 @@ def test_writes_report_with_legal_name_near_name_max(tmp_path):
         ",".join(FAILURE_REPORT_COLUMNS) + "\n"
     ).encode()
     assert_no_temporary_reports(tmp_path)
+
+
+def test_prepared_destination_closes_directory_fd_after_success(tmp_path):
+    input_path = tmp_path / "input.xlsx"
+    output_path = tmp_path / "failed.csv"
+    input_path.write_bytes(b"input")
+    prepared = report.prepare_report_destination(
+        input_path,
+        output_path,
+    )
+    directory_fd = prepared.directory_fd
+
+    with prepared as destination:
+        write_failure_report(destination, [])
+
+    assert output_path.is_file()
+    assert_file_descriptor_closed(directory_fd)
+
+
+def test_prepared_destination_closes_directory_fd_after_exception(tmp_path):
+    input_path = tmp_path / "input.xlsx"
+    output_path = tmp_path / "failed.csv"
+    input_path.write_bytes(b"input")
+    prepared = report.prepare_report_destination(
+        input_path,
+        output_path,
+    )
+    directory_fd = prepared.directory_fd
+
+    with pytest.raises(RuntimeError, match="validation failed"):
+        with prepared:
+            raise RuntimeError("validation failed")
+
+    assert_file_descriptor_closed(directory_fd)
+
+
+def test_prepare_rejects_parent_changed_between_stat_and_directory_open(
+    tmp_path,
+    monkeypatch,
+):
+    input_dir = tmp_path / "input"
+    reports = tmp_path / "reports"
+    moved_reports = tmp_path / "reports-moved"
+    input_dir.mkdir()
+    reports.mkdir()
+    input_path = input_dir / "input.xlsx"
+    input_path.write_bytes(b"input")
+    output_path = reports / "failed.csv"
+    real_open = os.open
+    changed_parent = False
+
+    def open_after_parent_replacement(
+        path,
+        flags,
+        mode=0o777,
+        *,
+        dir_fd=None,
+    ):
+        nonlocal changed_parent
+        if not changed_parent and flags & os.O_DIRECTORY:
+            changed_parent = True
+            reports.rename(moved_reports)
+            reports.symlink_to(input_dir, target_is_directory=True)
+        if dir_fd is None:
+            return real_open(path, flags, mode)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(report.os, "open", open_after_parent_replacement)
+
+    with pytest.raises(
+        report.ReportPathError,
+        match="changed while opening",
+    ):
+        report.prepare_report_destination(input_path, output_path)

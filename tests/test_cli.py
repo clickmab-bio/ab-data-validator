@@ -233,11 +233,12 @@ def test_cli_rejects_output_hard_linked_to_input_before_reading(tmp_path, capsys
     assert "must be different" in capsys.readouterr().err
 
 
-def test_cli_keeps_early_canonical_output_when_parent_symlink_changes(
+def test_cli_keeps_open_output_directory_when_parent_is_replaced(
     tmp_path, monkeypatch
 ):
     input_dir = tmp_path / "input"
     reports = tmp_path / "reports"
+    moved_reports = tmp_path / "reports-moved"
     input_dir.mkdir()
     reports.mkdir()
     input_path = input_dir / "input.xlsx"
@@ -246,16 +247,14 @@ def test_cli_keeps_early_canonical_output_when_parent_symlink_changes(
         [[1, "Ab1", "ab_h", "n/a", 1, "优化改造", None, None]],
     )
     original_input = input_path.read_bytes()
-    output_parent = tmp_path / "output-parent"
-    output_parent.symlink_to(reports, target_is_directory=True)
-    requested_output = output_parent / "input.xlsx"
+    requested_output = reports / "input.xlsx"
     use_builtin_positive(monkeypatch, tmp_path)
     real_load_input_file = cli.load_input_file
 
     def load_then_retarget(path):
         loaded = real_load_input_file(path)
-        output_parent.unlink()
-        output_parent.symlink_to(input_dir, target_is_directory=True)
+        reports.rename(moved_reports)
+        reports.symlink_to(input_dir, target_is_directory=True)
         return loaded
 
     monkeypatch.setattr(cli, "load_input_file", load_then_retarget)
@@ -274,7 +273,7 @@ def test_cli_keeps_early_canonical_output_when_parent_symlink_changes(
         aligner=FixedIdentityAligner(("AAAAAAAB", "AAAAAAAC")),
     )
 
-    fixed_report = reports / "input.xlsx"
+    fixed_report = moved_reports / "input.xlsx"
     assert exit_code == 0
     assert input_path.read_bytes() == original_input
     assert fixed_report.is_file()
