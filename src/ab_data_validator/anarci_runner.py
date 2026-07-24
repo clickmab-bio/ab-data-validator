@@ -57,12 +57,16 @@ def run_anarci(
     anarci_bin: str = "ANARCI",
     runner: CommandRunner | None = None,
 ) -> list[NumberedResidue]:
+    del sequence_id
     command_runner = runner or _run_command
     with tempfile.TemporaryDirectory() as directory:
         workdir = Path(directory)
         input_path = workdir / "input.fasta"
         output_prefix = workdir / "anarci"
-        input_path.write_text(f">{sequence_id}\n{sequence}\n", encoding="utf-8")
+        input_path.write_text(
+            f">query\n{sequence}\n",
+            encoding="utf-8",
+        )
         command = [
             anarci_bin,
             "-i",

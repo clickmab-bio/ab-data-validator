@@ -69,6 +69,36 @@ def test_run_anarci_builds_imgt_csv_command():
     assert [residue.position for residue in residues] == [1, 127]
 
 
+def test_run_anarci_uses_internal_fasta_identifier():
+    captured = {}
+    csv_text = "Id,domain_no,chain_type,1,127\nquery,0,H,E,Y\n"
+
+    def fake_runner(command):
+        input_path = command[command.index("-i") + 1]
+        with open(input_path, encoding="utf-8") as handle:
+            captured["fasta"] = handle.read()
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=csv_text,
+            stderr="",
+        )
+
+    residues = run_anarci(
+        sequence="EVY",
+        sequence_id="Ab1\n>injected",
+        anarci_bin="ANARCI",
+        runner=fake_runner,
+    )
+
+    assert captured["fasta"] == ">query\nEVY\n"
+    assert "Ab1" not in captured["fasta"]
+    assert [
+        (residue.position, residue.residue)
+        for residue in residues
+    ] == [(1, "E"), (127, "Y")]
+
+
 def test_run_anarci_reads_light_chain_kl_csv_output_file():
     csv_text = "Id,domain_no,chain_type,1,127\nAb1,0,K,D,K\n"
 
