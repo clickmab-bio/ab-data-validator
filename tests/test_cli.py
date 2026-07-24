@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from ab_data_validator.cli import _format_progress_message, main
+from ab_data_validator.cli import _build_parser, _format_progress_message, main
 from ab_data_validator.muscle import MuscleError
 from ab_data_validator.numbering import NumberedResidue
 from tests.xlsx_utils import write_xlsx
@@ -128,6 +128,139 @@ def test_cli_defaults_output_next_to_input(tmp_path, monkeypatch):
 
     assert exit_code == 0
     assert (tmp_path / "failed_reasons.csv").exists()
+
+
+def test_cli_defaults_to_pairwise_backend():
+    args = _build_parser().parse_args(["validate", "--input", "input.xlsx"])
+
+    assert args.aligner == "pairwise"
+    assert args.muscle_bin is None
+
+
+def test_cli_accepts_manual_muscle_fallback():
+    args = _build_parser().parse_args(
+        [
+            "validate",
+            "--input",
+            "input.xlsx",
+            "--aligner",
+            "muscle",
+            "--muscle-bin",
+            "muscle5",
+        ]
+    )
+
+    assert args.aligner == "muscle"
+    assert args.muscle_bin == "muscle5"
+
+
+def test_cli_rejects_muscle_bin_in_pairwise_mode(monkeypatch):
+    def fail_if_input_is_loaded(_):
+        raise AssertionError("input must not be read for an invalid argument combination")
+
+    monkeypatch.setattr("ab_data_validator.cli.load_input_file", fail_if_input_is_loaded)
+
+    with pytest.raises(SystemExit) as error:
+        main(
+            [
+                "validate",
+                "--input",
+                "input.xlsx",
+                "--muscle-bin",
+                "muscle5",
+            ]
+        )
+
+    assert error.value.code == 2
+
+
+def test_cli_constructs_and_logs_pairwise_default(tmp_path, capsys, monkeypatch):
+    input_path = tmp_path / "input.xlsx"
+    output_path = tmp_path / "failed.csv"
+    write_input_xlsx(input_path, [[1, "Ab1", "ab_h", "n/a", 1, "优化改造", None, None]])
+    use_builtin_positive(monkeypatch, tmp_path)
+    captured_factory_args = {}
+    fixed_aligner = FixedIdentityAligner(("AAAAAAAB", "AAAAAAAC"))
+
+    def create_aligner(backend, *, muscle_bin):
+        captured_factory_args.update(backend=backend, muscle_bin=muscle_bin)
+        return fixed_aligner
+
+    monkeypatch.setattr("ab_data_validator.cli.create_production_aligner", create_aligner)
+    monkeypatch.setattr(
+        "ab_data_validator.cli.describe_production_aligner",
+        lambda backend, *, muscle_bin: "aligner=pairwise biopython=1.87 matrix=BLOSUM62 gap_open=11 gap_extend=1",
+    )
+
+    exit_code = main(
+        ["validate", "--input", str(input_path), "--output", str(output_path)],
+        numberer=FakeNumberer({"ab_h": make_chain(), "pos_h": make_chain()}),
+    )
+
+    assert exit_code == 0
+    assert captured_factory_args == {"backend": "pairwise", "muscle_bin": "muscle"}
+    assert (
+        "Using aligner=pairwise biopython=1.87 matrix=BLOSUM62 gap_open=11 gap_extend=1"
+        in capsys.readouterr().err
+    )
+
+
+def test_cli_logs_injected_aligner_without_constructing_default(tmp_path, capsys, monkeypatch):
+    input_path = tmp_path / "input.xlsx"
+    output_path = tmp_path / "failed.csv"
+    write_input_xlsx(input_path, [[1, "Ab1", "ab_h", "n/a", 1, "优化改造", None, None]])
+    use_builtin_positive(monkeypatch, tmp_path)
+
+    def fail_if_default_is_constructed(*args, **kwargs):
+        raise AssertionError("injected aligner must bypass default construction")
+
+    monkeypatch.setattr("ab_data_validator.cli.create_production_aligner", fail_if_default_is_constructed)
+
+    exit_code = main(
+        ["validate", "--input", str(input_path), "--output", str(output_path)],
+        numberer=FakeNumberer({"ab_h": make_chain(), "pos_h": make_chain()}),
+        aligner=FixedIdentityAligner(("AAAAAAAB", "AAAAAAAC")),
+    )
+
+    assert exit_code == 0
+    assert "Using injected aligner" in capsys.readouterr().err
+
+
+def test_cli_constructs_manual_muscle_fallback(tmp_path, capsys, monkeypatch):
+    input_path = tmp_path / "input.xlsx"
+    output_path = tmp_path / "failed.csv"
+    write_input_xlsx(input_path, [[1, "Ab1", "ab_h", "n/a", 1, "优化改造", None, None]])
+    use_builtin_positive(monkeypatch, tmp_path)
+    captured_factory_args = {}
+
+    def create_aligner(backend, *, muscle_bin):
+        captured_factory_args.update(backend=backend, muscle_bin=muscle_bin)
+        return FixedIdentityAligner(("AAAAAAAB", "AAAAAAAC"))
+
+    monkeypatch.setattr("ab_data_validator.cli.create_production_aligner", create_aligner)
+    monkeypatch.setattr(
+        "ab_data_validator.cli.describe_production_aligner",
+        lambda backend, *, muscle_bin: f"aligner={backend} executable={muscle_bin}",
+    )
+
+    exit_code = main(
+        [
+            "validate",
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+            "--aligner",
+            "muscle",
+            "--muscle-bin",
+            "muscle5",
+        ],
+        numberer=FakeNumberer({"ab_h": make_chain(), "pos_h": make_chain()}),
+    )
+
+    assert exit_code == 0
+    assert captured_factory_args == {"backend": "muscle", "muscle_bin": "muscle5"}
+    assert "Using aligner=muscle executable=muscle5" in capsys.readouterr().err
 
 
 def test_cli_excel_input_adds_parent_references_to_current_run_positive_set(tmp_path, monkeypatch):

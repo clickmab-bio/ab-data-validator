@@ -7,9 +7,17 @@ from importlib import resources
 from pathlib import Path
 from typing import Sequence
 
+from ab_data_validator.alignment import (
+    AlignmentBackendError,
+    DEFAULT_ALIGNER,
+    SUPPORTED_ALIGNERS,
+    MuscleAligner,
+    create_production_aligner,
+    describe_production_aligner,
+)
 from ab_data_validator.anarci_runner import run_anarci
 from ab_data_validator.input_loader import InputLoadError, load_input_file
-from ab_data_validator.muscle import MuscleError, align_pair
+from ab_data_validator.muscle import MuscleError
 from ab_data_validator.numbering import NumberedResidue
 from ab_data_validator.parallel import resolve_worker_count
 from ab_data_validator.positive_library import PositiveLibraryError, load_positive_library
@@ -28,15 +36,6 @@ class AnarciNumberer:
             sequence_id=f"{sequence_id}_{chain}",
             anarci_bin=self.anarci_bin,
         )
-
-
-class MuscleAligner:
-    def __init__(self, *, muscle_bin: str) -> None:
-        self.muscle_bin = muscle_bin
-
-    def align(self, cdr_name: str, candidate_cdr: str, positive_cdr: str) -> tuple[str, str]:
-        del cdr_name
-        return align_pair(candidate_cdr, positive_cdr, muscle_bin=self.muscle_bin)
 
 
 BEIJING_TZ = timezone(timedelta(hours=8), "UTC+08:00")
@@ -64,6 +63,8 @@ def main(
     parser = _build_parser()
     args = parser.parse_args(argv)
     if args.command == "validate":
+        if args.aligner != "muscle" and args.muscle_bin is not None:
+            parser.error("--muscle-bin requires --aligner muscle")
         return _run_validate(args, numberer=numberer, aligner=aligner)
     parser.print_help(sys.stderr)
     return 2
@@ -77,7 +78,17 @@ def _build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--output", type=Path, help="failed-reasons output CSV")
     validate.add_argument("--identity-threshold", default=0.8, type=float)
     validate.add_argument("--anarci-bin", default="ANARCI")
-    validate.add_argument("--muscle-bin", default="muscle")
+    validate.add_argument(
+        "--aligner",
+        choices=SUPPORTED_ALIGNERS,
+        default=DEFAULT_ALIGNER,
+        help="alignment backend; defaults to pairwise",
+    )
+    validate.add_argument(
+        "--muscle-bin",
+        default=None,
+        help="MUSCLE executable; valid only with --aligner muscle",
+    )
     validate.add_argument(
         "--workers",
         default=0,
@@ -123,11 +134,27 @@ def _run_validate(
             builtin_positives = load_positive_library(positive_path)
             progress_logger(f"Loaded {len(builtin_positives)} built-in positive references")
             positives = builtin_positives + loaded_input.parent_references
+            effective_muscle_bin = args.muscle_bin or "muscle"
+            if aligner is None:
+                selected_aligner = create_production_aligner(
+                    args.aligner,
+                    muscle_bin=effective_muscle_bin,
+                )
+                progress_logger(
+                    "Using "
+                    + describe_production_aligner(
+                        args.aligner,
+                        muscle_bin=effective_muscle_bin,
+                    )
+                )
+            else:
+                selected_aligner = aligner
+                progress_logger("Using injected aligner")
             max_workers = resolve_worker_count(args.workers)
             progress_logger(f"Using {max_workers} worker(s)")
             validator = Validator(
                 numberer=numberer or AnarciNumberer(anarci_bin=args.anarci_bin),
-                aligner=aligner or MuscleAligner(muscle_bin=args.muscle_bin),
+                aligner=selected_aligner,
                 identity_threshold=args.identity_threshold,
                 max_workers=max_workers,
                 progress_logger=progress_logger,
@@ -139,6 +166,7 @@ def _run_validate(
         print(format_validation_summary(loaded_input.candidates, failures, output_path))
     except (
         InputLoadError,
+        AlignmentBackendError,
         MuscleError,
         OSError,
         PositiveLibraryError,
