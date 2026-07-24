@@ -1,4 +1,6 @@
 .git
+.worktrees/
+docs/
 .codex
 .pytest_cache
 __pycache__
@@ -7,3 +9,4 @@ __pycache__
 build
 dist
 .venv
+zhiyaobang_patent_seq.xlsx
