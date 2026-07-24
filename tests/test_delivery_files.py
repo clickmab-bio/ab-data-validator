@@ -4,7 +4,14 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PREBUILT_IMAGE = "clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.2"
+PRODUCTION_IMAGE = (
+    "clickmab-hub.tencentcloudcr.com/public/"
+    "ab-data-validator:v1.3"
+)
+LEGACY_IMAGE = (
+    "clickmab-hub.tencentcloudcr.com/public/"
+    "ab-data-validator:v1.2"
+)
 
 
 def test_pairwise_runtime_dependency_is_pinned_across_delivery_files():
@@ -46,8 +53,8 @@ def test_readme_documents_excel_only_parent_references_and_summary():
     assert "zhiyaobang_patent_seq_cleaned.xlsx" not in readme
     assert "examples/demo_failed_reasons.csv" in readme
     assert "--workers" in readme
-    assert PREBUILT_IMAGE in readme
-    assert "docker pull clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.2" in readme
+    assert PRODUCTION_IMAGE in readme
+    assert f"docker pull {PRODUCTION_IMAGE}" in readme
     assert "金标准测试数据" in readme
     assert "随意替换、追加或扩展" in readme
     assert "临时追加额外阳性参考" not in readme
@@ -67,25 +74,43 @@ def test_readme_documents_excel_only_parent_references_and_summary():
     assert "identity = 4 / 5 = 0.8" in readme
 
 
-def test_quick_start_uses_current_source_for_expanded_library_and_example():
+def test_quick_start_uses_published_v1_3_image():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     quick_start = readme.split("## 快速开始", 1)[1].split("---", 1)[0]
 
-    assert "docker build -t ab-data-validator ." in quick_start
-    assert "当前源码" in quick_start
+    assert f"docker pull {PRODUCTION_IMAGE}" in quick_start
+    assert PRODUCTION_IMAGE in quick_start
+    assert LEGACY_IMAGE not in quick_start
     assert "307 条阳参" in quick_start
     assert "examples/demo_failed_reasons.csv" in quick_start
-    assert PREBUILT_IMAGE not in quick_start
-    assert "docker pull" not in quick_start
 
 
-def test_readme_documents_exact_demo_report_provenance():
+def test_readme_distinguishes_current_image_from_legacy_v1_2():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
-    assert "固定 v1.2 运行环境" in readme
-    assert "只读挂载当前的 `positive_library.py`、`positive.csv` 和 `report.py`" in readme
-    assert "与当前这三项运行逻辑和数据一致" in readme
-    assert "由当前源码构建的镜像生成" not in readme
+    assert "当前生产镜像 v1.3" in readme
+    assert "历史 v1.2" in readme
+    assert PRODUCTION_IMAGE in readme
+    assert LEGACY_IMAGE in readme
+    assert "v1.2 不包含当前 307 条阳参库" in readme
+
+
+def test_readme_documents_pairwise_production_and_muscle_fallback():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert PRODUCTION_IMAGE in readme
+    assert LEGACY_IMAGE in readme
+    assert "Pairwise 是默认生产比对后端" in readme
+    assert "Biopython 1.87" in readme
+    assert "BLOSUM62" in readme
+    assert "`gap_open=11`" in readme
+    assert "`gap_extend=1`" in readme
+    assert "--aligner muscle" in readme
+    assert "不会自动回退" in readme
+    assert "50,490" in readme
+    assert "33.574 秒" in readme
+    assert "721.451 秒" in readme
+    assert "21.49 倍" in readme
 
 
 def test_readme_documents_expanded_library_and_openclaw_benchmark():

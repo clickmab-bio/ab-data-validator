@@ -12,6 +12,7 @@
 
 - [快速开始](#快速开始)
 - [性能参考](#性能参考)
+- [生产比对后端](#生产比对后端)
 - [输入格式](#输入格式)
 - [阳性参考数据](#阳性参考数据)
 - [推荐使用方式：Docker](#推荐使用方式docker)
@@ -30,11 +31,11 @@
 
 ## 快速开始
 
-当前 307 条阳参库推荐从当前源码构建镜像后运行示例校验：
+当前生产镜像 v1.3 已包含 307 条阳参库。拉取镜像后即可运行示例校验：
 
 ```bash
-docker build -t ab-data-validator .
-docker run --rm -v "$PWD:/data" ab-data-validator \
+docker pull clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.3
+docker run --rm -v "$PWD:/data" clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.3 \
   validate \
   --input /data/input.xlsx \
   --output /data/examples/failed_reasons.csv
@@ -44,11 +45,14 @@ docker run --rm -v "$PWD:/data" ab-data-validator \
 `--input` 改为挂载目录中的实际文件路径。Excel 工作簿属于本地输入/输出，
 已由 `.gitignore` 统一忽略，不随仓库分发。
 
-校验结果将输出到 `examples/failed_reasons.csv`。仓库中的 `examples/demo_failed_reasons.csv` 是在固定 v1.2 运行环境中，只读挂载当前的 `positive_library.py`、`positive.csv` 和 `report.py` 后生成的参考结果，与当前这三项运行逻辑和数据一致；这项产物证据不表示当前源码的新镜像已经完成构建。
+校验结果将输出到 `examples/failed_reasons.csv`。仓库中的
+`examples/demo_failed_reasons.csv` 可用于核对失败报告的字段和结构。
 
 ---
 
 ## 性能参考
+
+### 阳参规模扩展历史基准
 
 本项目在 OpenClaw 16 核服务器上，用同一批 50 条纳米抗体序列（VHH 候选抗体，0 个母本/起始抗体）对扩展前后的阳参库进行了对照测试。容器固定使用 16 个逻辑 CPU（`0-15`）、禁用网络，并设置 `--workers 16`。基线组和扩展组各完成一次有效预热，再按“基线 1、扩展 1、基线 2、扩展 2、基线 3、扩展 3”交替完成三次正式运行；汇总采用三次墙钟时间的中位数。
 
@@ -64,6 +68,46 @@ docker run --rm -v "$PWD:/data" ab-data-validator \
 内存数据通过每 100 毫秒读取一次 cgroup v2 的 `memory.current` 获得，因此只是采样到的最大当前内存，不是内核保证的绝对峰值。两组使用同一固定 v1.2 镜像，并同时只读挂载修正版 `positive_library.py`；扩展组只额外挂载更新后的 `positive.csv`。这样可以隔离阳参规模的影响。修正是必要的，因为 v1.2 旧加载器会删除名称内部空格，含 `×` 的扩展阳参名称会导致该符号进入 ANARCI 标识符并使编号失败；修正版只保留名称内部空格，不改变 VH/VL 序列规范化逻辑。因此，不能把未挂载修正版加载器和扩展 CSV 的原始 v1.2 镜像直接解释为“已经包含并可加载当前 307 条扩展数据”。
 
 本次 50 条 VHH 仅用于性能测试，不是带独立真值的准确率数据集；测试结果不能用于推断灵敏度、特异度或误报率。完整的测试环境、日志、指标和统计口径保存在本地 `docs/performance/2026-07-23-patent-library-benchmark/`（`docs/` 按仓库规则不纳入版本控制）。
+
+### 比对后端切换先导测试
+
+在同一台 OpenClaw 16 核服务器上，还使用相同输入和 307 条阳参库对生产
+Pairwise 后端与 MUSCLE 后端进行了独立先导测试。该测试共覆盖 **50,490 次**
+候选 CDR 与参考 CDR 比较：
+
+| 后端 | 16 核墙钟中位数 |
+| --- | ---: |
+| Pairwise | 33.574 秒 |
+| MUSCLE | 721.451 秒 |
+
+Pairwise 相对 MUSCLE 加速 **21.49 倍**。在这 50,490 次比较中，两种后端的
+最终 PASS/FAIL、命中集合和最终报告完全一致。不过，不同算法生成的内部 gap
+排列及部分低阈值 identity 不保证相同，不应把本次结果外推为所有序列和阈值下
+逐比对结果都完全相同。
+
+该结果衡量的是固定 307 条阳参库下切换比对后端的收益；上面的历史结果衡量
+的是 MUSCLE 后端下阳参从 48 条扩展到 307 条的规模影响。两组数据的基线和
+研究问题不同，不能直接互相替代。
+
+---
+
+## 生产比对后端
+
+Pairwise 是默认生产比对后端，固定使用 Biopython 1.87、BLOSUM62、
+`gap_open=11` 和 `gap_extend=1`。程序不会自动回退到 MUSCLE；Pairwise
+执行失败时会报告错误并终止。
+
+需要人工回退时，显式传入 `--aligner muscle`：
+
+```bash
+ab-data-validator validate \
+  --input input.xlsx \
+  --output failed_reasons.csv \
+  --aligner muscle
+```
+
+MUSCLE 仅是人工选择的兼容后端。使用该后端时才需要安装 MUSCLE，也只有此时
+`--muscle-bin` 参数才有效。
 
 ---
 
@@ -136,13 +180,25 @@ Excel 输入文件第 7/8 列中的母本/起始抗体序列会作为本次运�
 
 ## 推荐使用方式：Docker
 
-当前 307 条阳参库请按“快速开始”从当前源码构建镜像。已发布的公共镜像仅用于复现历史 v1.2 运行环境和本次性能基准的固定基础环境：
+当前生产镜像 v1.3 包含当前 307 条阳参库、默认 Pairwise 后端和所需运行依赖：
+
+```bash
+docker pull clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.3
+```
+
+镜像地址为
+`clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.3`。如需审计或
+修改实现，也可使用仓库内 Dockerfile 自行构建。
+
+### 复现历史 v1.2
+
+历史镜像地址为
+`clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.2`。**v1.2 不包含当前 307 条阳参库**，也不代表当前生产后端；它只用于复现历史 v1.2
+环境和阳参规模扩展基准。
 
 ```bash
 docker pull clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.2
 ```
-
-该镜像仓库 ID 为 `clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.2`。它是本次性能测试的固定基础环境，但镜像自身早于当前 307 条阳参库和名称空格兼容修复。若要直接使用当前仓库内置的 307 条阳参，应从当前源码重新构建镜像；不要把仅执行 `docker pull` 得到的原始 v1.2 镜像误认为已经包含本次扩展数据。
 
 复现历史 v1.2 校验：
 
@@ -153,7 +209,7 @@ docker run --rm -v "$PWD:/data" clickmab-hub.tencentcloudcr.com/public/ab-data-v
   --output /data/examples/failed_reasons.csv
 ```
 
-如需审计、修改或自行构建镜像，可使用仓库内 Dockerfile。Dockerfile 默认使用官方构建源：
+Dockerfile 默认使用官方构建源：
 
 - 基础镜像默认使用 `mambaorg/micromamba:1.5.10`。
 - Conda 默认使用 `https://repo.anaconda.com`，并通过 `https://conda.anaconda.org` 映射 `conda-forge` 与 `bioconda`。
@@ -185,7 +241,8 @@ docker run --rm -v "$PWD:/data" ab-data-validator \
   --output /data/examples/failed_reasons.csv
 ```
 
-请自行提供本地 Excel 输入文件；仓库不跟踪 Excel 工作簿。当前跟踪的参考输出 `examples/demo_failed_reasons.csv` 使用上述固定 v1.2 环境和三项只读挂载生成，不是未经挂载的原始 v1.2 镜像参考输出。`examples/failed_reasons.csv` 是本地运行产物，已在 `.gitignore` 中忽略。
+请自行提供本地 Excel 输入文件；仓库不跟踪 Excel 工作簿。
+`examples/failed_reasons.csv` 是本地运行产物，已在 `.gitignore` 中忽略。
 
 > ⚠️ **安全提示**：当前 Dockerfile 中使用 `USER root` 运行容器，这是为了确保对挂载卷的读写权限。在生产环境中部署时，请注意评估安全风险，或考虑使用 `--user` 参数指定非特权用户运行。
 
@@ -221,13 +278,15 @@ ab-data-validator validate \
   --output failed_reasons.csv
 ```
 
-环境配置中固定了 ANARCI 版本：
+环境配置中固定了 Biopython 和 ANARCI 版本：
 
 ```bash
+conda install biopython=1.87
 conda install bioconda::anarci==2021.02.04
 ```
 
-MUSCLE 封装使用 MUSCLE 5 的命令格式：
+仅在人工选择 `--aligner muscle` 时需要 MUSCLE。MUSCLE 封装使用 MUSCLE 5
+的命令格式：
 
 ```bash
 muscle -align input.fasta -output aligned.fasta -quiet
@@ -240,8 +299,9 @@ muscle -align input.fasta -output aligned.fasta -quiet
 | 依赖 | 版本要求 | 说明 |
 |------|----------|------|
 | Python | ≥ 3.10 | 运行时环境 |
+| Biopython | 1.87 | 默认 Pairwise 全局序列比对后端 |
 | ANARCI | 2021.02.04 | 抗体编号工具，通过 Conda bioconda 频道安装 |
-| MUSCLE | ≥ 5.x | 序列比对工具，通过 Conda bioconda 频道安装 |
+| MUSCLE | ≥ 5.x | 可选的人工回退比对工具，仅在 `--aligner muscle` 下需要 |
 | Docker | 任意版本 | 推荐方式，无需本地安装上述依赖 |
 
 **操作系统兼容性**：
@@ -250,7 +310,9 @@ muscle -align input.fasta -output aligned.fasta -quiet
 - ✅ macOS — 原生支持（Conda 或 Docker）
 - ⚠️ Windows — 建议通过 Docker 或 WSL2 使用
 
-> **注意**：`pyproject.toml` 中的 `dependencies` 为空，因为 ANARCI 和 MUSCLE 为外部可执行文件，需通过 Conda 或 Docker 环境安装，不能通过 `pip install` 自动拉取。直接 `pip install` 安装后仍需手动配置 ANARCI 和 MUSCLE 环境。
+> **注意**：通过 pip 安装项目时会安装固定版本的 Biopython；ANARCI 仍需
+> 通过 Conda 或 Docker 环境提供。只有人工选择 MUSCLE 后端时才需要另行配置
+> MUSCLE。
 
 ---
 
@@ -266,7 +328,8 @@ ab-data-validator validate [参数]
 | `--output` | 否 | 输入文件旁的 `failed_reasons.csv` | 失败报告输出路径 |
 | `--identity-threshold` | 否 | `0.8` | CDR 一致性阈值，范围 0–1 |
 | `--anarci-bin` | 否 | `ANARCI` | ANARCI 可执行文件路径或名称 |
-| `--muscle-bin` | 否 | `muscle` | MUSCLE 可执行文件路径或名称 |
+| `--aligner` | 否 | `pairwise` | 序列比对后端，可选 `pairwise` 或 `muscle` |
+| `--muscle-bin` | 否 | `muscle` | MUSCLE 可执行文件路径或名称，仅在 `--aligner muscle` 下有效 |
 | `--workers` | 否 | `0` | 并行 worker 数；`0` 表示按当前可用 CPU 核心数自动检测，`1` 表示串行执行 |
 
 示例 — 使用自定义阈值：
@@ -323,7 +386,8 @@ ANARCI 产生的间隙残基（如 `-`）在提取 CDR 序列时会被忽略。
 - 内置阳参库中的所有抗体；
 - Excel 第 7/8 列提供的所有母本/起始抗体序列。
 
-使用 MUSCLE 对每对 CDR 进行比对。一致性按以下公式计算：
+默认使用 Pairwise 对每对 CDR 进行全局比对，固定采用 Biopython 1.87、
+BLOSUM62、`gap_open=11` 和 `gap_extend=1`。一致性仍按以下公式计算：
 
 ```text
 identity = 匹配的比对列数 / 总比对列数
@@ -407,8 +471,10 @@ Failure report: /data/failed_reasons.csv
 | 抗体名称为空 | `InputLoadError` | Excel 第 2 列不能为空 |
 | VH 序列为空 | `InputLoadError` | Excel 第 3 列不能为空 |
 | 母本/起始抗体 VL 存在但 VH 缺失 | `InputLoadError` | Excel 第 8 列有值时第 7 列也必须有值 |
+| 输入和输出路径冲突 | `ReportPathError` | 输入工作簿与失败报告不能指向同一路径或同一文件 |
 | ANARCI 执行失败 | 记录为失败行 | 对应行标记为 `anarci_failed`，不中断整体校验 |
-| MUSCLE 执行失败 | `MuscleError` | MUSCLE 未安装或比对出错，程序终止 |
+| Pairwise 后端失败 | `AlignmentBackendError` | Pairwise 无法产生有效比对时程序终止，不会自动回退 |
+| MUSCLE 执行失败 | `MuscleError` | 人工选择 MUSCLE 后，若未安装或比对出错，程序终止 |
 | 阳性参考自身校验失败 | `PositiveReferenceError` | 内置或追加的阳性参考数据无法通过编号校验，程序终止 |
 | 文件读写错误 | `OSError` | 输入文件不存在或输出路径无写入权限 |
 
@@ -432,6 +498,8 @@ ab-data-validator/
 │   ├── positive_library.py # 内置阳性参考数据加载
 │   ├── models.py           # 数据模型（AntibodyRow、ValidationFailure）
 │   ├── anarci_runner.py    # ANARCI 外部调用封装
+│   ├── alignment.py        # 生产比对后端选择与配置
+│   ├── biopython_pairwise.py # Biopython Pairwise 全局比对封装
 │   ├── muscle.py           # MUSCLE 序列比对封装
 │   ├── numbering.py        # IMGT 编号完整性校验
 │   ├── cdr.py              # CDR 区域提取
