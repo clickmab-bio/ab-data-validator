@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import islice
+from math import isfinite
 
 from Bio import Align
 from Bio.Align import substitution_matrices
@@ -16,10 +17,10 @@ class PairwiseConfig:
     gap_extend: float
 
     def __post_init__(self) -> None:
-        if not self.gap_open > 0:
-            raise ValueError("gap_open must be greater than 0")
-        if not self.gap_extend > 0:
-            raise ValueError("gap_extend must be greater than 0")
+        if not isfinite(self.gap_open) or self.gap_open <= 0:
+            raise ValueError("gap_open must be finite and greater than 0")
+        if not isfinite(self.gap_extend) or self.gap_extend <= 0:
+            raise ValueError("gap_extend must be finite and greater than 0")
 
     @property
     def key(self) -> str:
@@ -42,17 +43,7 @@ class PairwiseObservation:
 
 
 class BiopythonGlobalAligner:
-    def __init__(
-        self,
-        config: PairwiseConfig,
-        *,
-        max_optimal_alignments: int = 1000,
-    ) -> None:
-        if max_optimal_alignments < 1:
-            raise ValueError(
-                "max_optimal_alignments must be greater than or equal to 1"
-            )
-
+    def __init__(self, config: PairwiseConfig) -> None:
         try:
             substitution_matrix = substitution_matrices.load(config.matrix)
         except (FileNotFoundError, KeyError, ValueError) as error:
@@ -67,10 +58,20 @@ class BiopythonGlobalAligner:
         aligner.extend_gap_score = -config.gap_extend
 
         self.config = config
-        self.max_optimal_alignments = max_optimal_alignments
         self._aligner = aligner
 
-    def observe(self, candidate: str, positive: str) -> PairwiseObservation:
+    def observe(
+        self,
+        candidate: str,
+        positive: str,
+        *,
+        max_optimal_alignments: int,
+    ) -> PairwiseObservation:
+        if max_optimal_alignments < 1:
+            raise ValueError(
+                "max_optimal_alignments must be greater than or equal to 1"
+            )
+
         alignments = self._aligner.align(candidate, positive)
         try:
             optimal_alignment_count: int | None = len(alignments)
@@ -78,7 +79,7 @@ class BiopythonGlobalAligner:
             optimal_alignment_count = None
 
         observed_alignments = list(
-            islice(alignments, self.max_optimal_alignments)
+            islice(alignments, max_optimal_alignments)
         )
         if not observed_alignments:
             raise ValueError("pairwise alignment produced no alignments")
@@ -116,7 +117,11 @@ class BiopythonGlobalAligner:
         positive_cdr: str,
     ) -> tuple[str, str]:
         del cdr_name
-        observation = self.observe(candidate_cdr, positive_cdr)
+        observation = self.observe(
+            candidate_cdr,
+            positive_cdr,
+            max_optimal_alignments=1,
+        )
         return (
             observation.first_aligned_candidate,
             observation.first_aligned_positive,

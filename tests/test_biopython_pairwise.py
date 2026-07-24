@@ -14,7 +14,11 @@ from ab_data_validator.biopython_pairwise import (  # noqa: E402
 def test_blosum62_global_alignment_observation() -> None:
     aligner = BiopythonGlobalAligner(PairwiseConfig("BLOSUM62", 10.0, 0.5))
 
-    observation = aligner.observe("ARDY", "ARDYG")
+    observation = aligner.observe(
+        "ARDY",
+        "ARDYG",
+        max_optimal_alignments=1000,
+    )
 
     assert observation.first_aligned_candidate == "ARDY-"
     assert observation.first_aligned_positive == "ARDYG"
@@ -29,7 +33,11 @@ def test_blosum62_global_alignment_observation() -> None:
 def test_pam30_global_alignment_exact_match() -> None:
     aligner = BiopythonGlobalAligner(PairwiseConfig("PAM30", 9.0, 1.0))
 
-    observation = aligner.observe("ARDY", "ARDY")
+    observation = aligner.observe(
+        "ARDY",
+        "ARDY",
+        max_optimal_alignments=1000,
+    )
 
     assert observation.first_identity == pytest.approx(1.0)
     assert observation.min_identity == pytest.approx(1.0)
@@ -48,12 +56,16 @@ def test_pairwise_config_is_frozen_ordered_and_has_stable_key() -> None:
 @pytest.mark.parametrize(
     ("gap_open", "gap_extend", "message"),
     [
-        (0.0, 0.5, "gap_open must be greater than 0"),
-        (-1.0, 0.5, "gap_open must be greater than 0"),
-        (float("nan"), 0.5, "gap_open must be greater than 0"),
-        (10.0, 0.0, "gap_extend must be greater than 0"),
-        (10.0, -1.0, "gap_extend must be greater than 0"),
-        (10.0, float("nan"), "gap_extend must be greater than 0"),
+        (0.0, 0.5, "gap_open must be finite and greater than 0"),
+        (-1.0, 0.5, "gap_open must be finite and greater than 0"),
+        (float("nan"), 0.5, "gap_open must be finite and greater than 0"),
+        (float("inf"), 0.5, "gap_open must be finite and greater than 0"),
+        (float("-inf"), 0.5, "gap_open must be finite and greater than 0"),
+        (10.0, 0.0, "gap_extend must be finite and greater than 0"),
+        (10.0, -1.0, "gap_extend must be finite and greater than 0"),
+        (10.0, float("nan"), "gap_extend must be finite and greater than 0"),
+        (10.0, float("inf"), "gap_extend must be finite and greater than 0"),
+        (10.0, float("-inf"), "gap_extend must be finite and greater than 0"),
     ],
 )
 def test_gap_penalties_must_be_positive(
@@ -97,45 +109,75 @@ class _FakePairwiseAligner:
 
 
 def test_observation_caps_enumeration_and_reports_truncation(monkeypatch) -> None:
-    aligner = BiopythonGlobalAligner(
-        PairwiseConfig("BLOSUM62", 10.0, 0.5),
-        max_optimal_alignments=1000,
-    )
+    aligner = BiopythonGlobalAligner(PairwiseConfig("BLOSUM62", 10.0, 0.5))
     monkeypatch.setattr(aligner, "_aligner", _FakePairwiseAligner(_FakeAlignments(2000)))
 
-    observation = aligner.observe("ARDY", "ARDY")
+    observation = aligner.observe(
+        "ARDY",
+        "ARDY",
+        max_optimal_alignments=1000,
+    )
+    smaller_observation = aligner.observe(
+        "ARDY",
+        "ARDY",
+        max_optimal_alignments=3,
+    )
 
     assert observation.optimal_alignment_count == 2000
     assert observation.enumerated_alignment_count == 1000
     assert observation.truncated is True
+    assert smaller_observation.optimal_alignment_count == 2000
+    assert smaller_observation.enumerated_alignment_count == 3
+    assert smaller_observation.truncated is True
 
 
 def test_overflowing_alignment_count_is_unknown_and_truncated(monkeypatch) -> None:
-    aligner = BiopythonGlobalAligner(
-        PairwiseConfig("BLOSUM62", 10.0, 0.5),
-        max_optimal_alignments=2,
-    )
+    aligner = BiopythonGlobalAligner(PairwiseConfig("BLOSUM62", 10.0, 0.5))
     monkeypatch.setattr(
         aligner,
         "_aligner",
         _FakePairwiseAligner(_OverflowingAlignments(3)),
     )
 
-    observation = aligner.observe("ARDY", "ARDY")
+    observation = aligner.observe(
+        "ARDY",
+        "ARDY",
+        max_optimal_alignments=2,
+    )
 
     assert observation.optimal_alignment_count is None
     assert observation.enumerated_alignment_count == 2
     assert observation.truncated is True
 
 
-def test_max_optimal_alignments_must_be_positive() -> None:
+def test_observe_max_optimal_alignments_must_be_positive() -> None:
+    aligner = BiopythonGlobalAligner(PairwiseConfig("BLOSUM62", 10.0, 0.5))
+
     with pytest.raises(
         ValueError,
         match="max_optimal_alignments must be greater than or equal to 1",
     ):
-        BiopythonGlobalAligner(
-            PairwiseConfig("BLOSUM62", 10.0, 0.5),
+        aligner.observe(
+            "ARDY",
+            "ARDY",
             max_optimal_alignments=0,
+        )
+
+
+def test_observe_limit_is_required_and_keyword_only() -> None:
+    aligner = BiopythonGlobalAligner(PairwiseConfig("BLOSUM62", 10.0, 0.5))
+
+    with pytest.raises(TypeError):
+        aligner.observe("ARDY", "ARDY")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        aligner.observe("ARDY", "ARDY", 1)  # type: ignore[call-arg]
+
+
+def test_constructor_accepts_only_config() -> None:
+    with pytest.raises(TypeError):
+        BiopythonGlobalAligner(  # type: ignore[call-arg]
+            PairwiseConfig("BLOSUM62", 10.0, 0.5),
+            max_optimal_alignments=1,
         )
 
 
@@ -144,7 +186,11 @@ def test_observe_rejects_empty_alignment_results(monkeypatch) -> None:
     monkeypatch.setattr(aligner, "_aligner", _FakePairwiseAligner(_FakeAlignments(0)))
 
     with pytest.raises(ValueError, match="pairwise alignment produced no alignments"):
-        aligner.observe("ARDY", "ARDY")
+        aligner.observe(
+            "ARDY",
+            "ARDY",
+            max_optimal_alignments=1000,
+        )
 
 
 def test_align_adapts_first_alignment_to_aligner_protocol() -> None:
