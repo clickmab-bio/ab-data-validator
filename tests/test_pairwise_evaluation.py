@@ -110,20 +110,27 @@ def test_difference_record_has_stable_field_order() -> None:
         ((DEFAULT_CONFIGS[0],), 1.1, 1, "threshold"),
         ((DEFAULT_CONFIGS[0],), float("nan"), 1, "threshold"),
         ((DEFAULT_CONFIGS[0],), float("inf"), 1, "threshold"),
-        ((DEFAULT_CONFIGS[0],), 0.8, 0, "max_optimal_alignments"),
+        ((DEFAULT_CONFIGS[0],), 0.8, 1.5, "positive integer"),
+        ((DEFAULT_CONFIGS[0],), 0.8, True, "positive integer"),
+        ((DEFAULT_CONFIGS[0],), 0.8, False, "positive integer"),
+        ((DEFAULT_CONFIGS[0],), 0.8, float("nan"), "positive integer"),
+        ((DEFAULT_CONFIGS[0],), 0.8, float("inf"), "positive integer"),
+        ((DEFAULT_CONFIGS[0],), 0.8, float("-inf"), "positive integer"),
+        ((DEFAULT_CONFIGS[0],), 0.8, 0, "positive integer"),
+        ((DEFAULT_CONFIGS[0],), 0.8, -1, "positive integer"),
     ],
 )
 def test_constructor_validates_inputs(
     configs: tuple[PairwiseConfig, ...],
     threshold: float,
-    maximum: int,
+    maximum: object,
     message: str,
 ) -> None:
     with pytest.raises(ValueError, match=message):
         ShadowEvaluator(
             configs=configs,
             threshold=threshold,
-            max_optimal_alignments=maximum,
+            max_optimal_alignments=maximum,  # type: ignore[arg-type]
         )
 
 
@@ -180,6 +187,39 @@ def test_multi_optimal_truncated_and_ambiguous_are_counted(monkeypatch) -> None:
     assert outcome["multi_optimal_count"] == 1
     assert outcome["truncated_count"] == 1
     assert outcome["gate_passed"] is False
+
+
+def test_unknown_optimal_count_is_treated_as_multi_optimal(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    evaluator = ShadowEvaluator(
+        configs=DEFAULT_CONFIGS[:1],
+        threshold=0.8,
+        max_optimal_alignments=1,
+    )
+    monkeypatch.setattr(
+        evaluator,
+        "_observe",
+        lambda config, candidate_cdr, positive_cdr: _observation(
+            optimal_alignment_count=None,
+            enumerated_alignment_count=1,
+            truncated=False,
+        ),
+    )
+
+    evaluator.observe(_comparison(), ("ARDY-", "ARDYG"), 0.8)
+    evaluator.write(tmp_path)
+
+    outcome = evaluator.summary()["configurations"][0]
+    assert outcome["multi_optimal_count"] == 1
+    with (tmp_path / "differences.csv").open(
+        encoding="utf-8", newline=""
+    ) as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 1
+    assert rows[0]["optimal_alignment_count"] == ""
+    assert rows[0]["truncated"] == "False"
 
 
 def test_best_passing_config_uses_smallest_maximum_error(monkeypatch) -> None:
@@ -269,7 +309,7 @@ def test_shadow_output_is_stably_sorted_and_parseable(tmp_path, monkeypatch) -> 
     assert (tmp_path / "differences.csv").read_text(encoding="utf-8") == first_csv
 
 
-def test_negligible_float_noise_does_not_create_difference_record(
+def test_any_nonzero_float_difference_creates_difference_record(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -278,7 +318,7 @@ def test_negligible_float_noise_does_not_create_difference_record(
         threshold=0.5,
         max_optimal_alignments=1000,
     )
-    identities = iter((0.9 + 5e-13, 0.9 + 2e-12))
+    identities = iter((0.9 + 5e-13, 0.9))
     monkeypatch.setattr(
         evaluator,
         "_observe",
@@ -287,8 +327,16 @@ def test_negligible_float_noise_does_not_create_difference_record(
         ),
     )
 
-    evaluator.observe(_comparison(candidate_name="Ignored"), ("ARDY", "ARDY"), 0.9)
-    evaluator.observe(_comparison(candidate_name="Recorded"), ("ARDY", "ARDY"), 0.9)
+    evaluator.observe(
+        _comparison(candidate_name="Recorded"),
+        ("ARDY", "ARDY"),
+        0.9,
+    )
+    evaluator.observe(
+        _comparison(candidate_name="Identical"),
+        ("ARDY", "ARDY"),
+        0.9,
+    )
     evaluator.write(tmp_path)
 
     with (tmp_path / "differences.csv").open(

@@ -4,7 +4,7 @@ import csv
 import json
 import threading
 from dataclasses import asdict, dataclass, fields
-from math import fsum, isclose, isfinite
+from math import fsum, isfinite
 from pathlib import Path
 
 from ab_data_validator.biopython_pairwise import (
@@ -31,9 +31,6 @@ DEFAULT_CONFIGS = tuple(
     for matrix in ("BLOSUM62", "PAM30")
     for gap_open, gap_extend in GAP_CONFIGS
 )
-
-_IDENTITY_ABSOLUTE_TOLERANCE = 1e-12
-
 
 @dataclass(frozen=True)
 class DifferenceRecord:
@@ -86,9 +83,13 @@ class ShadowEvaluator:
             raise ValueError("config keys must be unique")
         if not isfinite(threshold) or not 0.0 <= threshold <= 1.0:
             raise ValueError("threshold must be finite and between 0 and 1")
-        if max_optimal_alignments < 1:
+        if (
+            not isinstance(max_optimal_alignments, int)
+            or isinstance(max_optimal_alignments, bool)
+            or max_optimal_alignments < 1
+        ):
             raise ValueError(
-                "max_optimal_alignments must be greater than or equal to 1"
+                "max_optimal_alignments must be a positive integer"
             )
 
         self.configs = configs
@@ -171,17 +172,12 @@ class ShadowEvaluator:
                 <= observation.max_identity
             )
             multi_optimal = (
-                (
-                    observation.optimal_alignment_count is not None
-                    and observation.optimal_alignment_count > 1
-                )
+                observation.optimal_alignment_count is None
+                or observation.optimal_alignment_count > 1
                 or observation.enumerated_alignment_count > 1
             )
-            identity_different = not isclose(
-                muscle_identity,
-                observation.first_identity,
-                rel_tol=0.0,
-                abs_tol=_IDENTITY_ABSOLUTE_TOLERANCE,
+            identity_different = (
+                muscle_identity != observation.first_identity
             )
             difference = None
             if (
