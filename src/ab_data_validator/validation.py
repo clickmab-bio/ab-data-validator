@@ -49,6 +49,9 @@ class IdentityComparison:
     positive_cdr: str
 
 
+ComparisonObserver = Callable[[IdentityComparison, tuple[str, str], float], None]
+
+
 InputItem = TypeVar("InputItem")
 OutputItem = TypeVar("OutputItem")
 ProgressLogger = Callable[[str], None]
@@ -69,6 +72,7 @@ class Validator:
         identity_threshold: float = 0.8,
         max_workers: int = 1,
         progress_logger: ProgressLogger | None = None,
+        comparison_observer: ComparisonObserver | None = None,
     ) -> None:
         if max_workers < 1:
             raise ValueError("max_workers must be greater than or equal to 1")
@@ -77,6 +81,7 @@ class Validator:
         self.identity_threshold = identity_threshold
         self.max_workers = max_workers
         self.progress_logger = progress_logger
+        self.comparison_observer = comparison_observer
 
     def validate(
         self,
@@ -236,6 +241,12 @@ class Validator:
             comparison.positive_cdr,
         )
         identity = calculate_identity(aligned_candidate, aligned_positive)
+        if self.comparison_observer is not None:
+            self.comparison_observer(
+                comparison,
+                (aligned_candidate, aligned_positive),
+                identity,
+            )
         if not is_high_identity(identity, threshold=self.identity_threshold):
             return None
         chain = "VH" if comparison.cdr_name.startswith("CDRH") else "VL"

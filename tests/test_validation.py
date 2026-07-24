@@ -94,6 +94,56 @@ def test_full_antibody_high_identity_failure_is_recorded():
     assert failures[0].threshold == 0.8
 
 
+def test_comparison_observer_receives_comparison_alignment_and_identity():
+    observations = []
+    candidate = AntibodyRow(name="Ab1", vh="ab_h", vl=None)
+    positive = AntibodyRow(name="Pos1", vh="pos_h", vl=None)
+    validator = Validator(
+        numberer=FakeNumberer(
+            {
+                "ab_h": make_chain("A", "B", "C"),
+                "pos_h": make_chain("G", "H", "I"),
+            }
+        ),
+        aligner=RecordingAligner(high_identity_pairs={"CDRH1"}),
+        comparison_observer=lambda comparison, alignment, identity: observations.append(
+            (comparison, alignment, identity)
+        ),
+    )
+
+    validator.validate([candidate], [positive])
+
+    comparison, alignment, identity = observations[0]
+    assert comparison.candidate_name == "Ab1"
+    assert comparison.positive_name == "Pos1"
+    assert comparison.cdr_name == "CDRH1"
+    assert alignment == ("A" * 12, "A" * 12)
+    assert identity == 1.0
+
+
+def test_comparison_observer_exception_propagates_from_validate():
+    def raise_observer_error(comparison, alignment, identity):
+        del comparison, alignment, identity
+        raise RuntimeError("observer failed")
+
+    validator = Validator(
+        numberer=FakeNumberer(
+            {
+                "ab_h": make_chain("A", "B", "C"),
+                "pos_h": make_chain("G", "H", "I"),
+            }
+        ),
+        aligner=RecordingAligner(),
+        comparison_observer=raise_observer_error,
+    )
+
+    with pytest.raises(RuntimeError, match="observer failed"):
+        validator.validate(
+            [AntibodyRow(name="Ab1", vh="ab_h", vl=None)],
+            [AntibodyRow(name="Pos1", vh="pos_h", vl=None)],
+        )
+
+
 def test_candidate_records_multiple_chain_and_cdr_failures():
     candidate = AntibodyRow(name="BadNb", vh="bad_h", vl=None)
     positive = AntibodyRow(name="Pos1", vh="pos_h", vl=None)
