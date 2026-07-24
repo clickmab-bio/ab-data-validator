@@ -12,10 +12,7 @@ license = { text = "MIT" }
 authors = [
   { name = "clickmab-bio" }
 ]
-dependencies = []
-
-[project.optional-dependencies]
-pairwise-benchmark = ["biopython==1.87"]
+dependencies = ["biopython==1.87"]
 
 [project.scripts]
 ab-data-validator = "ab_data_validator.cli:main"

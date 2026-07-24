@@ -1881,7 +1881,7 @@ def test_main_reports_optional_dependency_install_hint(
     exit_code = tool.main(arguments)
 
     assert exit_code != 0
-    assert "install .[pairwise-benchmark]" in capsys.readouterr().err
+    assert "install ." in capsys.readouterr().err
 
 
 def test_module_import_and_parser_do_not_require_biopython():
@@ -1922,7 +1922,7 @@ def test_runtime_reports_biopython_api_failure_with_install_hint(
     with pytest.raises(tool.OptionalDependencyError) as captured:
         tool.load_pairwise_runtime()
 
-    assert "install .[pairwise-benchmark]" in str(captured.value)
+    assert "install ." in str(captured.value)
 
 
 @pytest.mark.parametrize(

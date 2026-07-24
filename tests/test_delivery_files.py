@@ -7,6 +7,17 @@ ROOT = Path(__file__).resolve().parents[1]
 PREBUILT_IMAGE = "clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.2"
 
 
+def test_pairwise_runtime_dependency_is_pinned_across_delivery_files():
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    environment = (ROOT / "environment.yml").read_text(encoding="utf-8")
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    assert 'dependencies = ["biopython==1.87"]' in pyproject
+    assert "pairwise-benchmark" not in pyproject
+    assert "  - biopython=1.87" in environment
+    assert "Bio.__version__ == '1.87'" in dockerfile
+
+
 def test_dockerfile_defaults_to_official_base_image_and_package_sources():
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 

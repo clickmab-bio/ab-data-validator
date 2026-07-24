@@ -44,7 +44,7 @@ from ab_data_validator.validation import (
 )
 
 
-INSTALL_HINT = "install .[pairwise-benchmark]"
+INSTALL_HINT = "install ."
 SHADOW_ARTIFACT_NAMES = frozenset(
     {
         "muscle_failed_reasons.csv",

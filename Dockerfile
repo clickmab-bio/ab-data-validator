@@ -28,7 +28,9 @@ RUN printf '%s\n' \
 
 WORKDIR /app
 COPY --chown=$MAMBA_USER:$MAMBA_USER . /app
-RUN micromamba run -n ab-data-validator pip install --no-build-isolation --no-deps -e .
+RUN micromamba run -n ab-data-validator pip install --no-build-isolation --no-deps -e . \
+    && micromamba run -n ab-data-validator python -c \
+       "import Bio; assert Bio.__version__ == '1.87'"
 
 USER root
 ENTRYPOINT ["micromamba", "run", "-n", "ab-data-validator", "ab-data-validator"]
