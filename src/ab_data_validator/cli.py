@@ -82,7 +82,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--aligner",
         choices=SUPPORTED_ALIGNERS,
         default=DEFAULT_ALIGNER,
-        help="alignment backend; defaults to pairwise",
+        help=f"sequence alignment backend; default: {DEFAULT_ALIGNER}",
     )
     validate.add_argument(
         "--muscle-bin",
@@ -150,6 +150,7 @@ def _run_validate(
             else:
                 selected_aligner = aligner
                 progress_logger("Using injected aligner")
+            progress_logger(f"Using identity threshold {args.identity_threshold:g}")
             max_workers = resolve_worker_count(args.workers)
             progress_logger(f"Using {max_workers} worker(s)")
             validator = Validator(

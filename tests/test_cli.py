@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from ab_data_validator.alignment import AlignmentBackendError
 from ab_data_validator.cli import _build_parser, _format_progress_message, main
 from ab_data_validator.muscle import MuscleError
 from ab_data_validator.numbering import NumberedResidue
@@ -43,6 +44,13 @@ class FixedIdentityAligner:
 class FailingAligner:
     def align(self, cdr_name, candidate_cdr, positive_cdr):
         raise MuscleError("MUSCLE executable not found: muscle")
+
+
+class FailingPairwiseAligner:
+    def align(self, cdr_name, candidate_cdr, positive_cdr):
+        raise AlignmentBackendError(
+            "Pairwise alignment failed for CDRH3: no alignment"
+        )
 
 
 class CandidateAwareAligner:
@@ -152,6 +160,14 @@ def test_cli_accepts_manual_muscle_fallback():
 
     assert args.aligner == "muscle"
     assert args.muscle_bin == "muscle5"
+
+
+def test_cli_help_describes_configured_default_aligner(capsys):
+    with pytest.raises(SystemExit) as error:
+        _build_parser().parse_args(["validate", "--help"])
+
+    assert error.value.code == 0
+    assert "sequence alignment backend; default: pairwise" in capsys.readouterr().out
 
 
 def test_cli_rejects_muscle_bin_in_pairwise_mode(monkeypatch):
@@ -339,6 +355,30 @@ def test_cli_custom_threshold_changes_identity_filtering(tmp_path, monkeypatch):
     assert read_failure_rows(output_path) == []
 
 
+def test_cli_logs_custom_identity_threshold(tmp_path, capsys, monkeypatch):
+    input_path = tmp_path / "input.xlsx"
+    output_path = tmp_path / "failed.csv"
+    write_input_xlsx(input_path, [[1, "Ab1", "ab_h", "n/a", 1, "优化改造", None, None]])
+    use_builtin_positive(monkeypatch, tmp_path)
+
+    exit_code = main(
+        [
+            "validate",
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+            "--identity-threshold",
+            "0.75",
+        ],
+        numberer=FakeNumberer({"ab_h": make_chain(), "pos_h": make_chain()}),
+        aligner=FixedIdentityAligner(("AAAAAAAB", "AAAAAAAC")),
+    )
+
+    assert exit_code == 0
+    assert "Using identity threshold 0.75" in capsys.readouterr().err
+
+
 def test_cli_passes_resolved_worker_count_to_validator(tmp_path, monkeypatch):
     input_path = tmp_path / "input.xlsx"
     output_path = tmp_path / "failed.csv"
@@ -510,6 +550,29 @@ def test_cli_returns_nonzero_for_alignment_runtime_error(tmp_path, capsys, monke
     captured = capsys.readouterr()
     assert exit_code == 2
     assert "MUSCLE executable not found" in captured.err
+
+
+def test_cli_returns_nonzero_for_alignment_backend_error(tmp_path, capsys, monkeypatch):
+    input_path = tmp_path / "input.xlsx"
+    output_path = tmp_path / "failed.csv"
+    write_input_xlsx(input_path, [[1, "Ab1", "ab_h", "n/a", 1, "优化改造", None, None]])
+    use_builtin_positive(monkeypatch, tmp_path)
+
+    exit_code = main(
+        [
+            "validate",
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        ],
+        numberer=FakeNumberer({"ab_h": make_chain(), "pos_h": make_chain()}),
+        aligner=FailingPairwiseAligner(),
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "Pairwise alignment failed for CDRH3: no alignment" in captured.err
 
 
 def test_cli_returns_nonzero_when_output_file_cannot_be_written(tmp_path, capsys, monkeypatch):
