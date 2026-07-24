@@ -15,10 +15,11 @@ def _dockerignore_patterns() -> set[str]:
 def test_dockerignore_excludes_local_build_artifacts():
     patterns = _dockerignore_patterns()
 
-    assert {"docs/", ".worktrees/", "zhiyaobang_patent_seq.xlsx"} <= patterns
-
-
-def test_dockerignore_keeps_cleaned_patent_workbook():
-    patterns = _dockerignore_patterns()
-
-    assert "zhiyaobang_patent_seq_cleaned.xlsx" not in patterns
+    assert {
+        "docs/",
+        ".worktrees/",
+        "*.[xX][lL][sS]",
+        "*.[xX][lL][sS][xXmMbB]",
+        "*.[xX][lL][tT][xXmM]",
+        "*.[xX][lL][aA][mM]",
+    } <= patterns

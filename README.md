@@ -36,9 +36,13 @@
 docker build -t ab-data-validator .
 docker run --rm -v "$PWD:/data" ab-data-validator \
   validate \
-  --input /data/examples/demo_submit.xlsx \
+  --input /data/input.xlsx \
   --output /data/examples/failed_reasons.csv
 ```
+
+运行前请将待分析的 Excel 工作簿放到仓库根目录并命名为 `input.xlsx`，或将
+`--input` 改为挂载目录中的实际文件路径。Excel 工作簿属于本地输入/输出，
+已由 `.gitignore` 统一忽略，不随仓库分发。
 
 校验结果将输出到 `examples/failed_reasons.csv`。仓库中的 `examples/demo_failed_reasons.csv` 是在固定 v1.2 运行环境中，只读挂载当前的 `positive_library.py`、`positive.csv` 和 `report.py` 后生成的参考结果，与当前这三项运行逻辑和数据一致；这项产物证据不表示当前源码的新镜像已经完成构建。
 
@@ -121,7 +125,7 @@ Excel 第 7/8 列用于记录改造抗体对应的母本/起始抗体序列：
 | WO2024098980A1 | 3 |
 | CN114907479B | 139 |
 
-内置阳性参考数据位于 `src/ab_data_validator/data/positive.csv`，共 307 条逻辑记录，随工具包一起分发，是固定的金标准测试数据，**无法通过命令行覆盖**。本次专利数据清洗后的原格式工作簿保存在仓库根目录 `zhiyaobang_patent_seq_cleaned.xlsx`，用于追溯生成内置 CSV 的来源和去重结果。
+内置阳性参考数据位于 `src/ab_data_validator/data/positive.csv`，共 307 条逻辑记录，随工具包一起分发，是固定的金标准测试数据，**无法通过命令行覆盖**。用于生成内置 CSV 的原始及清洗后 Excel 工作簿仅在本地保存，并由 `.gitignore` 统一忽略，不随仓库分发。
 
 Excel 输入文件第 7/8 列中的母本/起始抗体序列会作为本次运行的额外对照序列，与内置阳参一起参与所有候选抗体的 CDR 一致性过滤。它们不会写回内置阳参库。
 
@@ -145,7 +149,7 @@ docker pull clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.2
 ```bash
 docker run --rm -v "$PWD:/data" clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.2 \
   validate \
-  --input /data/examples/demo_submit.xlsx \
+  --input /data/input.xlsx \
   --output /data/examples/failed_reasons.csv
 ```
 
@@ -177,11 +181,11 @@ docker build \
 ```bash
 docker run --rm -v "$PWD:/data" ab-data-validator \
   validate \
-  --input /data/examples/demo_submit.xlsx \
+  --input /data/input.xlsx \
   --output /data/examples/failed_reasons.csv
 ```
 
-仓库内置示例输入为 `examples/demo_submit.xlsx`；当前跟踪的参考输出 `examples/demo_failed_reasons.csv` 使用上述固定 v1.2 环境和三项只读挂载生成，不是未经挂载的原始 v1.2 镜像参考输出。`examples/failed_reasons.csv` 是本地运行产物，已在 `.gitignore` 中忽略。
+请自行提供本地 Excel 输入文件；仓库不跟踪 Excel 工作簿。当前跟踪的参考输出 `examples/demo_failed_reasons.csv` 使用上述固定 v1.2 环境和三项只读挂载生成，不是未经挂载的原始 v1.2 镜像参考输出。`examples/failed_reasons.csv` 是本地运行产物，已在 `.gitignore` 中忽略。
 
 > ⚠️ **安全提示**：当前 Dockerfile 中使用 `USER root` 运行容器，这是为了确保对挂载卷的读写权限。在生产环境中部署时，请注意评估安全风险，或考虑使用 `--user` 参数指定非特权用户运行。
 
@@ -419,10 +423,8 @@ ab-data-validator/
 ├── pyproject.toml          # Python 项目元数据与构建配置
 ├── LICENSE                 # MIT 许可证
 ├── README.md               # 本文档
-├── zhiyaobang_patent_seq_cleaned.xlsx # 清洗、改名和去重后的专利阳参工作簿
 ├── examples/
-│   ├── demo_submit.xlsx        # 示例输入 Excel
-│   └── demo_failed_reasons.csv # 示例输入对应的参考失败报告
+│   └── demo_failed_reasons.csv # 固定环境生成的参考失败报告
 ├── src/ab_data_validator/
 │   ├── __init__.py         # 包初始化与版本号
 │   ├── cli.py              # 命令行入口与参数解析

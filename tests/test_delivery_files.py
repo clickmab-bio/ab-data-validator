@@ -28,7 +28,11 @@ def test_readme_documents_excel_only_parent_references_and_summary():
     assert "输入文件路径（`.xlsx` 或 `.xlsm`）" in readme
     assert "母本/起始抗体" in readme
     assert "Validation summary" in readme
-    assert "examples/demo_submit.xlsx" in readme
+    assert "Excel 工作簿属于本地输入/输出" in readme
+    assert "Excel 工作簿仅在本地保存" in readme
+    assert "仓库不跟踪 Excel 工作簿" in readme
+    assert "examples/demo_submit.xlsx" not in readme
+    assert "zhiyaobang_patent_seq_cleaned.xlsx" not in readme
     assert "examples/demo_failed_reasons.csv" in readme
     assert "--workers" in readme
     assert PREBUILT_IMAGE in readme
@@ -89,8 +93,7 @@ def test_readme_documents_expanded_library_and_openclaw_benchmark():
     assert "6.132 倍" in readme
 
 
-def test_examples_include_demo_input_and_expected_report():
-    demo_input = ROOT / "examples" / "demo_submit.xlsx"
+def test_examples_include_expected_report():
     expected_report = ROOT / "examples" / "demo_failed_reasons.csv"
     expected_columns = [
         "name",
@@ -105,8 +108,6 @@ def test_examples_include_demo_input_and_expected_report():
         "details",
     ]
 
-    assert demo_input.is_file()
-    assert demo_input.stat().st_size > 0
     assert expected_report.is_file()
     with expected_report.open(encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -126,11 +127,13 @@ def test_examples_include_demo_input_and_expected_report():
     )
 
 
-def test_cleaned_patent_workbook_is_delivered():
-    cleaned_workbook = ROOT / "zhiyaobang_patent_seq_cleaned.xlsx"
+def test_excel_workbooks_are_ignored():
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
 
-    assert cleaned_workbook.is_file()
-    assert cleaned_workbook.stat().st_size > 0
+    assert "*.[xX][lL][sS]" in gitignore
+    assert "*.[xX][lL][sS][xXmMbB]" in gitignore
+    assert "*.[xX][lL][tT][xXmM]" in gitignore
+    assert "*.[xX][lL][aA][mM]" in gitignore
 
 
 def test_project_description_mentions_excel_not_csv_user_input():

@@ -9,3 +9,9 @@ dist/
 docs/
 .worktrees/
 examples/failed_reasons.csv
+
+# Excel workbooks are local inputs/outputs and must not be tracked.
+*.[xX][lL][sS]
+*.[xX][lL][sS][xXmMbB]
+*.[xX][lL][tT][xXmM]
+*.[xX][lL][aA][mM]

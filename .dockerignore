@@ -9,4 +9,7 @@ __pycache__
 build
 dist
 .venv
-zhiyaobang_patent_seq.xlsx
+*.[xX][lL][sS]
+*.[xX][lL][sS][xXmMbB]
+*.[xX][lL][tT][xXmM]
+*.[xX][lL][aA][mM]
