@@ -11,5 +11,5 @@ def test_builtin_positive_csv_is_packaged():
     positive_path = get_builtin_positive_csv_path()
 
     assert positive_path.is_file()
-    assert positive_path.read_text(encoding="utf-8").startswith("抗体名称,")
+    assert positive_path.read_text(encoding="utf-8-sig").startswith("抗体名称,")
     assert len(load_positive_library(positive_path)) > 0

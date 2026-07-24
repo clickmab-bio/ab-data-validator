@@ -22,7 +22,11 @@ FAILURE_REPORT_COLUMNS = [
 
 def write_failure_report(path: str | Path, failures: list[ValidationFailure]) -> None:
     with Path(path).open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=FAILURE_REPORT_COLUMNS)
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=FAILURE_REPORT_COLUMNS,
+            lineterminator="\n",
+        )
         writer.writeheader()
         for failure in failures:
             writer.writerow(_failure_to_row(failure))

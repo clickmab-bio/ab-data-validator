@@ -30,24 +30,36 @@
 
 ## 快速开始
 
-使用预构建 Docker 镜像运行示例校验：
+当前 307 条阳参库推荐从当前源码构建镜像后运行示例校验：
 
 ```bash
-docker pull clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.2
-docker run --rm -v "$PWD:/data" clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.2 \
+docker build -t ab-data-validator .
+docker run --rm -v "$PWD:/data" ab-data-validator \
   validate \
-  --input /data/examples/demo_submit.xlsx
+  --input /data/examples/demo_submit.xlsx \
+  --output /data/examples/failed_reasons.csv
 ```
 
-校验结果将输出到 `examples/failed_reasons.csv`。仓库同时提供了该示例输入对应的参考结果：`examples/demo_failed_reasons.csv`。
+校验结果将输出到 `examples/failed_reasons.csv`。仓库中的 `examples/demo_failed_reasons.csv` 是在固定 v1.2 运行环境中，只读挂载当前的 `positive_library.py`、`positive.csv` 和 `report.py` 后生成的参考结果，与当前这三项运行逻辑和数据一致；这项产物证据不表示当前源码的新镜像已经完成构建。
 
 ---
 
 ## 性能参考
 
-在一台 16 核服务器上执行数据分析时，50 条纳米抗体序列的完整分析耗时大于 37 秒。该数据可作为用户预估运行时间的参考。
+本项目在 OpenClaw 16 核服务器上，用同一批 50 条纳米抗体序列（VHH 候选抗体，0 个母本/起始抗体）对扩展前后的阳参库进行了对照测试。容器固定使用 16 个逻辑 CPU（`0-15`）、禁用网络，并设置 `--workers 16`。基线组和扩展组各完成一次有效预热，再按“基线 1、扩展 1、基线 2、扩展 2、基线 3、扩展 3”交替完成三次正式运行；汇总采用三次墙钟时间的中位数。
 
-实际耗时会受到 ANARCI、MUSCLE、序列长度、阳性参考数量、`--workers` 设置以及服务器当前负载影响。纳米抗体仅比较重链 CDR，但仍需要完成编号、CDR 提取和与参考序列的 CDR 一致性比较。
+| 指标 | 基线：48 条阳参 | 扩展：307 条阳参 | 变化 |
+|---|---:|---:|---:|
+| 三次正式运行墙钟时间 | 120.989 / 119.497 / 117.550 秒 | 732.761 / 736.930 / 726.156 秒 | — |
+| 墙钟时间中位数 | 119.497 秒 | 732.761 秒 | 6.132 倍 |
+| 候选抗体吞吐 | 0.4184 个/秒 | 0.06824 个/秒 | 下降 83.692% |
+| 理论 CDR 比较量 | 7,200 次 | 46,050 次 | 6.396 倍 |
+
+阳参从 48 条增加到 307 条后，理论比较量扩大 6.396 倍，实测墙钟时间扩大 6.132 倍，说明耗时增长主要来自阳参规模近似线性增长。扩展组完整分析耗时大于 37 秒；实际耗时还会受到 ANARCI、MUSCLE、序列长度、阳参数量、`--workers` 设置和服务器负载影响。
+
+内存数据通过每 100 毫秒读取一次 cgroup v2 的 `memory.current` 获得，因此只是采样到的最大当前内存，不是内核保证的绝对峰值。两组使用同一固定 v1.2 镜像，并同时只读挂载修正版 `positive_library.py`；扩展组只额外挂载更新后的 `positive.csv`。这样可以隔离阳参规模的影响。修正是必要的，因为 v1.2 旧加载器会删除名称内部空格，含 `×` 的扩展阳参名称会导致该符号进入 ANARCI 标识符并使编号失败；修正版只保留名称内部空格，不改变 VH/VL 序列规范化逻辑。因此，不能把未挂载修正版加载器和扩展 CSV 的原始 v1.2 镜像直接解释为“已经包含并可加载当前 307 条扩展数据”。
+
+本次 50 条 VHH 仅用于性能测试，不是带独立真值的准确率数据集；测试结果不能用于推断灵敏度、特异度或误报率。完整的测试环境、日志、指标和统计口径保存在本地 `docs/performance/2026-07-23-patent-library-benchmark/`（`docs/` 按仓库规则不纳入版本控制）。
 
 ---
 
@@ -82,16 +94,34 @@ Excel 第 7/8 列用于记录改造抗体对应的母本/起始抗体序列：
 
 ## 阳性参考数据
 
-工具内置了 **48 条阳性参考抗体序列**，涵盖以下来源：
+工具当前内置 **307 条阳性参考抗体序列**，其中 **240 条 IgG**、**67 条 VHH**；相较原有 48 条记录，去重后**净新增 259 条**。CSV 中“来自专利”字段共有 22 个不同来源或来源组合，已独立按逻辑记录核对：
 
-| 来源专利 | 开发公司 | 药物管线 | 类型 | 数量 |
-|----------|----------|----------|------|------|
-| WO2021180205A1 | 恒瑞 | SHR-2002 | VHH | 5 条 |
-| WO2023186063A1 | 普米斯 & BioNTech | PM-1009 | IgG | 4 条 |
-| US12312404B2 | Compugen | COM-701 | IgG | 35 条 |
-| US20230227572A1–A4 | 天港免疫 | TGI-2 | IgG | 4 条 |
+| 来源专利或组合 | 数量 |
+|---|---:|
+| WO2021180205A1 | 5 |
+| WO2023186063A1 | 4 |
+| US12312404B2 | 35 |
+| US20230227572A1 | 1 |
+| US20230227572A2 | 1 |
+| US20230227572A3 | 1 |
+| US20230227572A4 | 1 |
+| CN117957254A | 3 |
+| US20250326842A1 | 1 |
+| CN120230207A | 7 |
+| US11214619B2 / WO2020018879A1 | 13 |
+| US20240343803A1 / WO2023006040 | 33 |
+| US20240270840A1 / WO2022172267A1 | 8 |
+| US20240043530A1 / WO2021180205A1 | 24 |
+| WO2017041004A1 | 3 |
+| CN119119268A | 11 |
+| CN114644711A | 5 |
+| CN115819582A | 4 |
+| EP4582450A1 / WO2024046245A1 | 3 |
+| WO2024251160A1 | 2 |
+| WO2024098980A1 | 3 |
+| CN114907479B | 139 |
 
-内置阳性参考数据位于 `src/ab_data_validator/data/positive.csv`，共 48 条记录，随工具包一起分发，是固定的金标准测试数据，**无法通过命令行覆盖**。
+内置阳性参考数据位于 `src/ab_data_validator/data/positive.csv`，共 307 条逻辑记录，随工具包一起分发，是固定的金标准测试数据，**无法通过命令行覆盖**。本次专利数据清洗后的原格式工作簿保存在仓库根目录 `zhiyaobang_patent_seq_cleaned.xlsx`，用于追溯生成内置 CSV 的来源和去重结果。
 
 Excel 输入文件第 7/8 列中的母本/起始抗体序列会作为本次运行的额外对照序列，与内置阳参一起参与所有候选抗体的 CDR 一致性过滤。它们不会写回内置阳参库。
 
@@ -102,15 +132,15 @@ Excel 输入文件第 7/8 列中的母本/起始抗体序列会作为本次运�
 
 ## 推荐使用方式：Docker
 
-推荐直接使用已构建好的公共镜像：
+当前 307 条阳参库请按“快速开始”从当前源码构建镜像。已发布的公共镜像仅用于复现历史 v1.2 运行环境和本次性能基准的固定基础环境：
 
 ```bash
 docker pull clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.2
 ```
 
-该镜像仓库 ID 为 `clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.2`，已基于当前 Dockerfile 构建并推送到远端。中国大陆和其他地区用户均可较快拉取，避免本地构建时访问国外基础镜像、Conda 源或 pip 源较慢的问题。
+该镜像仓库 ID 为 `clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.2`。它是本次性能测试的固定基础环境，但镜像自身早于当前 307 条阳参库和名称空格兼容修复。若要直接使用当前仓库内置的 307 条阳参，应从当前源码重新构建镜像；不要把仅执行 `docker pull` 得到的原始 v1.2 镜像误认为已经包含本次扩展数据。
 
-运行校验：
+复现历史 v1.2 校验：
 
 ```bash
 docker run --rm -v "$PWD:/data" clickmab-hub.tencentcloudcr.com/public/ab-data-validator:v1.2 \
@@ -151,7 +181,7 @@ docker run --rm -v "$PWD:/data" ab-data-validator \
   --output /data/examples/failed_reasons.csv
 ```
 
-仓库内置示例输入为 `examples/demo_submit.xlsx`，对应的参考输出为 `examples/demo_failed_reasons.csv`。`examples/failed_reasons.csv` 是本地运行产物，已在 `.gitignore` 中忽略。
+仓库内置示例输入为 `examples/demo_submit.xlsx`；当前跟踪的参考输出 `examples/demo_failed_reasons.csv` 使用上述固定 v1.2 环境和三项只读挂载生成，不是未经挂载的原始 v1.2 镜像参考输出。`examples/failed_reasons.csv` 是本地运行产物，已在 `.gitignore` 中忽略。
 
 > ⚠️ **安全提示**：当前 Dockerfile 中使用 `USER root` 运行容器，这是为了确保对挂载卷的读写权限。在生产环境中部署时，请注意评估安全风险，或考虑使用 `--user` 参数指定非特权用户运行。
 
@@ -389,6 +419,7 @@ ab-data-validator/
 ├── pyproject.toml          # Python 项目元数据与构建配置
 ├── LICENSE                 # MIT 许可证
 ├── README.md               # 本文档
+├── zhiyaobang_patent_seq_cleaned.xlsx # 清洗、改名和去重后的专利阳参工作簿
 ├── examples/
 │   ├── demo_submit.xlsx        # 示例输入 Excel
 │   └── demo_failed_reasons.csv # 示例输入对应的参考失败报告
@@ -407,7 +438,7 @@ ab-data-validator/
 │   ├── report.py           # 失败报告 CSV 生成
 │   ├── summary.py          # 终端总览输出
 │   └── data/
-│       └── positive.csv    # 内置 48 条阳性参考序列
+│       └── positive.csv    # 内置 307 条阳性参考序列（240 条 IgG、67 条 VHH）
 └── tests/                  # 单元测试与集成测试
     ├── test_cli.py
     ├── test_delivery_files.py

@@ -19,7 +19,7 @@ def load_positive_library(path: str | Path) -> list[AntibodyRow]:
         for row_number, row in enumerate(reader, start=2):
             if not any(clean_cell(value) for value in row):
                 continue
-            name = _required_cell(row, 1, "name", row_number)
+            name = _required_name(row, 1, "name", row_number)
             vh = _required_cell(row, 3, "VH", row_number)
             vl = _optional_cell(row, 4)
             rows.append(AntibodyRow(name=name, vh=vh, vl=vl))
@@ -28,6 +28,14 @@ def load_positive_library(path: str | Path) -> list[AntibodyRow]:
 
 def _required_cell(row: list[str], one_based_index: int, label: str, row_number: int) -> str:
     value = _optional_cell(row, one_based_index)
+    if value is None:
+        raise PositiveLibraryError(f"row {row_number}: {label} is required")
+    return value
+
+
+def _required_name(row: list[str], one_based_index: int, label: str, row_number: int) -> str:
+    index = one_based_index - 1
+    value = clean_cell(row[index]) if index < len(row) else None
     if value is None:
         raise PositiveLibraryError(f"row {row_number}: {label} is required")
     return value

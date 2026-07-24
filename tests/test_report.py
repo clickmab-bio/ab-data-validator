@@ -17,6 +17,16 @@ def test_writes_header_when_no_failures(tmp_path):
     assert path.read_text(encoding="utf-8").strip() == ",".join(FAILURE_REPORT_COLUMNS)
 
 
+def test_writes_lf_line_endings(tmp_path):
+    path = tmp_path / "failed.csv"
+
+    write_failure_report(path, [])
+
+    report = path.read_bytes()
+    assert b"\n" in report
+    assert b"\r\n" not in report
+
+
 def test_writes_failure_rows(tmp_path):
     path = tmp_path / "failed.csv"
     failures = [

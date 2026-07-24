@@ -12,6 +12,8 @@ import tempfile
 from copy import copy
 from dataclasses import dataclass
 from pathlib import Path
+from xml.etree import ElementTree as ET
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from openpyxl import Workbook, load_workbook
 
@@ -38,6 +40,9 @@ BENCHMARK_HEADERS = (
     "起始分子轻链序列（若为VHH，此处为空）",
 )
 AMINO_ACIDS = frozenset("ACDEFGHIKLMNPQRSTVWY")
+SPREADSHEET_NAMESPACE = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+RELATIONSHIP_NAMESPACE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+PACKAGE_RELATIONSHIP_NAMESPACE = "http://schemas.openxmlformats.org/package/2006/relationships"
 
 
 @dataclass(frozen=True)
@@ -96,6 +101,7 @@ def prepare_patent_library(
         worksheet.cell(record.row, 4).value = record.vl
     _delete_rows_preserving_links_and_dimensions(worksheet, removed_rows)
     _write_outputs_transactionally(
+        source_path=source_path,
         workbook=workbook,
         cleaned_path=cleaned_path,
         csv_path=csv_path,
@@ -257,7 +263,7 @@ def _delete_rows_preserving_links_and_dimensions(worksheet, removed_rows: list[i
 
 def _write_csv(path: Path, records: list[_Record]) -> None:
     with Path(path).open("w", encoding="utf-8-sig", newline="") as file:
-        writer = csv.writer(file)
+        writer = csv.writer(file, lineterminator="\n")
         writer.writerow(SOURCE_HEADERS)
         for record in records:
             metadata = record.metadata.copy()
@@ -289,8 +295,75 @@ def _write_benchmark(path: Path, records: list[_Record]) -> None:
     workbook.save(path)
 
 
+def _restore_source_workbook_format(source_path: Path, output_path: Path) -> None:
+    """Restore OOXML parts that openpyxl cannot round-trip without changing them."""
+    with ZipFile(source_path) as source_archive, ZipFile(output_path) as output_archive:
+        source_columns = _columns_by_sheet_title(source_archive)
+        output_paths = _worksheet_paths_by_title(output_archive)
+        output_files = {name: output_archive.read(name) for name in output_archive.namelist()}
+        if "docProps/core.xml" in source_archive.namelist():
+            output_files["docProps/core.xml"] = source_archive.read("docProps/core.xml")
+
+    for title, output_sheet_path in output_paths.items():
+        if title not in source_columns:
+            continue
+        worksheet = ET.fromstring(output_files[output_sheet_path])
+        columns = worksheet.find(f"{{{SPREADSHEET_NAMESPACE}}}cols")
+        source_columns_element = ET.fromstring(source_columns[title])
+        if columns is None:
+            sheet_data = worksheet.find(f"{{{SPREADSHEET_NAMESPACE}}}sheetData")
+            worksheet.insert(list(worksheet).index(sheet_data), source_columns_element)
+        else:
+            worksheet.insert(list(worksheet).index(columns), source_columns_element)
+            worksheet.remove(columns)
+        output_files[output_sheet_path] = ET.tostring(worksheet, encoding="utf-8", xml_declaration=True)
+
+    descriptor, replacement_name = tempfile.mkstemp(
+        dir=output_path.parent, prefix=f".{output_path.name}.", suffix=output_path.suffix
+    )
+    os.close(descriptor)
+    replacement_path = Path(replacement_name)
+    try:
+        with ZipFile(replacement_path, "w", ZIP_DEFLATED) as archive:
+            for name, content in output_files.items():
+                archive.writestr(name, content)
+        os.chmod(replacement_path, _file_mode(output_path))
+        os.replace(replacement_path, output_path)
+    finally:
+        replacement_path.unlink(missing_ok=True)
+
+
+def _columns_by_sheet_title(archive: ZipFile) -> dict[str, bytes]:
+    paths = _worksheet_paths_by_title(archive)
+    columns = {}
+    for title, path in paths.items():
+        worksheet = ET.fromstring(archive.read(path))
+        element = worksheet.find(f"{{{SPREADSHEET_NAMESPACE}}}cols")
+        if element is not None:
+            columns[title] = ET.tostring(element, encoding="utf-8")
+    return columns
+
+
+def _worksheet_paths_by_title(archive: ZipFile) -> dict[str, str]:
+    workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+    relationships = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+    targets = {
+        relationship.attrib["Id"]: relationship.attrib["Target"]
+        for relationship in relationships.findall(f"{{{PACKAGE_RELATIONSHIP_NAMESPACE}}}Relationship")
+    }
+    return {
+        sheet.attrib["name"]: _worksheet_member_path(targets[sheet.attrib[f"{{{RELATIONSHIP_NAMESPACE}}}id"]])
+        for sheet in workbook.findall(f"{{{SPREADSHEET_NAMESPACE}}}sheets/{{{SPREADSHEET_NAMESPACE}}}sheet")
+    }
+
+
+def _worksheet_member_path(target: str) -> str:
+    member_path = target.lstrip("/")
+    return member_path if member_path.startswith("xl/") else f"xl/{member_path}"
+
+
 def _write_outputs_transactionally(
-    *, workbook, cleaned_path: Path, csv_path: Path, benchmark_path: Path,
+    *, source_path: Path, workbook, cleaned_path: Path, csv_path: Path, benchmark_path: Path,
     records: list[_Record], benchmark_records: list[_Record]
 ) -> None:
     targets = (cleaned_path, csv_path, benchmark_path)
@@ -314,6 +387,7 @@ def _write_outputs_transactionally(
             os.chmod(temporary_path, target_modes[target])
             temporary_paths.append(temporary_path)
         workbook.save(temporary_paths[0])
+        _restore_source_workbook_format(source_path, temporary_paths[0])
         _write_csv(temporary_paths[1], records)
         _write_benchmark(temporary_paths[2], benchmark_records)
 

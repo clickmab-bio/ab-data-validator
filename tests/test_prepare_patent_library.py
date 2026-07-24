@@ -6,6 +6,8 @@ from hashlib import sha256
 import os
 from pathlib import Path
 import stat
+from xml.etree import ElementTree as ET
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -69,6 +71,68 @@ def run_preparation(tmp_path: Path, **kwargs):
     )
 
 
+def set_default_column_alignment(path: Path, columns_by_sheet: dict[str, str]) -> None:
+    namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    workbook_namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    relationship_namespace = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    package_relationship_namespace = "http://schemas.openxmlformats.org/package/2006/relationships"
+    with ZipFile(path) as archive:
+        files = {name: archive.read(name) for name in archive.namelist()}
+
+    styles = ET.fromstring(files["xl/styles.xml"])
+    cell_xfs = styles.find(f"{{{namespace}}}cellXfs")
+    assert cell_xfs is not None
+    default_xf = cell_xfs[0]
+    default_xf.set("applyAlignment", "1")
+    ET.SubElement(default_xf, f"{{{namespace}}}alignment", {"vertical": "center"})
+    files["xl/styles.xml"] = ET.tostring(styles, encoding="utf-8", xml_declaration=True)
+
+    workbook = ET.fromstring(files["xl/workbook.xml"])
+    relationships = ET.fromstring(files["xl/_rels/workbook.xml.rels"])
+    targets = {
+        relationship.attrib["Id"]: relationship.attrib["Target"]
+        for relationship in relationships.findall(f"{{{package_relationship_namespace}}}Relationship")
+    }
+    sheet_paths = {
+        sheet.attrib["name"]: targets[sheet.attrib[f"{{{relationship_namespace}}}id"]].lstrip("/")
+        for sheet in workbook.findall(f"{{{workbook_namespace}}}sheets/{{{workbook_namespace}}}sheet")
+    }
+    for sheet_name, column in columns_by_sheet.items():
+        worksheet = ET.fromstring(files[sheet_paths[sheet_name]])
+        columns = worksheet.find(f"{{{namespace}}}cols")
+        assert columns is not None
+        column_index = ord(column) - ord("A") + 1
+        dimension = next(
+            item
+            for item in columns.findall(f"{{{namespace}}}col")
+            if item.attrib["min"] == str(column_index) and item.attrib["max"] == str(column_index)
+        )
+        dimension.set("style", "0")
+        files[sheet_paths[sheet_name]] = ET.tostring(worksheet, encoding="utf-8", xml_declaration=True)
+
+    with ZipFile(path, "w", ZIP_DEFLATED) as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+
+
+def set_empty_core_properties(path: Path) -> None:
+    with ZipFile(path) as archive:
+        files = {name: archive.read(name) for name in archive.namelist()}
+    files["docProps/core.xml"] = (
+        b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        b'<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"/>'
+    )
+    with ZipFile(path, "w", ZIP_DEFLATED) as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+
+
+def core_property_tags(path: Path) -> list[str]:
+    with ZipFile(path) as archive:
+        root = ET.fromstring(archive.read("docProps/core.xml"))
+    return [element.tag for element in root]
+
+
 def test_prepare_patent_library_cleans_exports_and_preserves_workbook(tmp_path):
     summary = run_preparation(tmp_path)
 
@@ -104,6 +168,15 @@ def test_prepare_patent_library_cleans_exports_and_preserves_workbook(tmp_path):
     assert [row[1] for row in benchmark_rows[1:]] == ["benchmark_001_Repeat", "benchmark_002_Repeat-1"]
     assert [row[2] for row in benchmark_rows[1:]] == ["ACDEF", "GHIK"]
     assert all(row[3] is None and row[6] is None and row[7] is None for row in benchmark_rows[1:])
+
+
+def test_prepare_patent_library_exports_csv_with_lf_line_endings(tmp_path):
+    run_preparation(tmp_path)
+
+    csv_bytes = (tmp_path / "positive.csv").read_bytes()
+
+    assert b"\r\n" not in csv_bytes
+    assert csv_bytes.count(b"\n") == 4
 
 
 def test_prepare_patent_library_rejects_unexpected_source_hash(tmp_path):
@@ -181,6 +254,44 @@ def test_prepare_patent_library_preserves_hyperlinks_and_row_heights_after_delet
     assert linked.hyperlink.target == "https://example.test/linked"
     assert linked.hyperlink.location is None
     assert cleaned.worksheets[0].row_dimensions[3].height == 33
+
+
+def test_prepare_patent_library_preserves_column_alignment_on_each_sheet(tmp_path):
+    source = tmp_path / "source.xlsx"
+    write_source(source)
+    workbook = load_workbook(source)
+    workbook["参考阳参抗体"].column_dimensions["A"].width = 22
+    workbook["抗体提交格式"].column_dimensions["B"].width = 18
+    workbook.save(source)
+    set_default_column_alignment(source, {"参考阳参抗体": "A", "抗体提交格式": "B"})
+
+    prepare_patent_library(
+        source_path=source,
+        cleaned_path=tmp_path / "cleaned.xlsx",
+        csv_path=tmp_path / "positive.csv",
+        benchmark_path=tmp_path / "benchmark.xlsx",
+        benchmark_size=2,
+    )
+
+    cleaned = load_workbook(tmp_path / "cleaned.xlsx")
+    assert cleaned["参考阳参抗体"].column_dimensions["A"].alignment.vertical == "center"
+    assert cleaned["抗体提交格式"].column_dimensions["B"].alignment.vertical == "center"
+
+
+def test_prepare_patent_library_preserves_empty_core_properties(tmp_path):
+    source = tmp_path / "source.xlsx"
+    write_source(source)
+    set_empty_core_properties(source)
+
+    prepare_patent_library(
+        source_path=source,
+        cleaned_path=tmp_path / "cleaned.xlsx",
+        csv_path=tmp_path / "positive.csv",
+        benchmark_path=tmp_path / "benchmark.xlsx",
+        benchmark_size=2,
+    )
+
+    assert core_property_tags(tmp_path / "cleaned.xlsx") == core_property_tags(source) == []
 
 
 def test_prepare_patent_library_keeps_existing_outputs_when_validation_fails(tmp_path):
