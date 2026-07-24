@@ -21,7 +21,11 @@ from ab_data_validator.muscle import MuscleError
 from ab_data_validator.numbering import NumberedResidue
 from ab_data_validator.parallel import resolve_worker_count
 from ab_data_validator.positive_library import PositiveLibraryError, load_positive_library
-from ab_data_validator.report import write_failure_report
+from ab_data_validator.report import (
+    ReportPathError,
+    ensure_distinct_input_output,
+    write_failure_report,
+)
 from ab_data_validator.summary import format_validation_summary
 from ab_data_validator.validation import Aligner, Numberer, PositiveReferenceError, Validator
 
@@ -124,6 +128,8 @@ def _run_validate(
 ) -> int:
     progress_logger = _print_progress
     try:
+        output_path = args.output or default_output_path(args.input)
+        ensure_distinct_input_output(args.input, output_path)
         progress_logger(f"Loading input: {args.input}")
         loaded_input = load_input_file(args.input)
         progress_logger(
@@ -161,7 +167,6 @@ def _run_validate(
                 progress_logger=progress_logger,
             )
             failures = validator.validate(loaded_input.candidates, positives)
-        output_path = args.output or default_output_path(args.input)
         progress_logger(f"Writing failure report: {output_path}")
         write_failure_report(output_path, failures)
         print(format_validation_summary(loaded_input.candidates, failures, output_path))
@@ -170,6 +175,7 @@ def _run_validate(
         AlignmentBackendError,
         MuscleError,
         OSError,
+        ReportPathError,
         PositiveLibraryError,
         PositiveReferenceError,
     ) as error:

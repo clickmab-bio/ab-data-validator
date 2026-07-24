@@ -190,6 +190,48 @@ def test_cli_rejects_muscle_bin_in_pairwise_mode(monkeypatch):
     assert error.value.code == 2
 
 
+def test_cli_rejects_input_and_output_at_same_path_before_reading_or_constructing_aligner(
+    tmp_path, capsys, monkeypatch
+):
+    input_path = tmp_path / "input.xlsx"
+    original_input = b"original workbook"
+    input_path.write_bytes(original_input)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("path validation must run first")
+
+    monkeypatch.setattr("ab_data_validator.cli.load_input_file", fail_if_called)
+    monkeypatch.setattr("ab_data_validator.cli.create_production_aligner", fail_if_called)
+
+    exit_code = main(
+        ["validate", "--input", str(input_path), "--output", str(input_path)]
+    )
+
+    assert exit_code == 2
+    assert "must be different" in capsys.readouterr().err
+    assert input_path.read_bytes() == original_input
+
+
+def test_cli_rejects_output_hard_linked_to_input_before_reading(tmp_path, capsys, monkeypatch):
+    input_path = tmp_path / "input.xlsx"
+    output_path = tmp_path / "failed.csv"
+    input_path.write_bytes(b"original workbook")
+    output_path.hardlink_to(input_path)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("path validation must run first")
+
+    monkeypatch.setattr("ab_data_validator.cli.load_input_file", fail_if_called)
+    monkeypatch.setattr("ab_data_validator.cli.create_production_aligner", fail_if_called)
+
+    exit_code = main(
+        ["validate", "--input", str(input_path), "--output", str(output_path)]
+    )
+
+    assert exit_code == 2
+    assert "must be different" in capsys.readouterr().err
+
+
 def test_cli_constructs_and_logs_pairwise_default(tmp_path, capsys, monkeypatch):
     input_path = tmp_path / "input.xlsx"
     output_path = tmp_path / "failed.csv"
