@@ -1,6 +1,7 @@
 import csv
 import os
 import stat
+from pathlib import Path
 
 import pytest
 
@@ -121,8 +122,35 @@ def test_writes_report_by_replacing_temp_file_in_destination_directory(tmp_path,
     temporary_path, destination = replace_calls[0]
     assert destination == path
     assert temporary_path.parent == path.parent
-    assert temporary_path.name.startswith(".failed.csv.")
+    assert temporary_path.name.startswith(".ab-report-")
     assert temporary_path.name.endswith(".tmp")
+
+
+def test_resolves_destination_parent_once_before_symlink_retarget(
+    tmp_path, monkeypatch
+):
+    real_a = tmp_path / "real-a"
+    real_b = tmp_path / "real-b"
+    real_a.mkdir()
+    real_b.mkdir()
+    parent_link = tmp_path / "report-parent"
+    parent_link.symlink_to(real_a, target_is_directory=True)
+    path = parent_link / "failed.csv"
+    real_replace = os.replace
+
+    def retargeting_replace(source, destination):
+        parent_link.unlink()
+        parent_link.symlink_to(real_b, target_is_directory=True)
+        real_replace(source, destination)
+
+    monkeypatch.setattr(report, "replace_file", retargeting_replace)
+
+    write_failure_report(path, [])
+
+    assert (real_a / "failed.csv").is_file()
+    assert not (real_b / "failed.csv").exists()
+    assert list(real_a.glob(".*.tmp")) == []
+    assert list(real_b.glob(".*.tmp")) == []
 
 
 def test_keeps_old_report_when_replace_fails_and_removes_temp_file(tmp_path, monkeypatch):
@@ -174,3 +202,68 @@ def test_new_report_is_readable_by_the_user_who_owns_the_output_directory(tmp_pa
     write_failure_report(path, [])
 
     assert stat.S_IMODE(path.stat().st_mode) == 0o644
+
+
+def test_new_report_mode_respects_restrictive_umask(tmp_path):
+    path = tmp_path / "failed.csv"
+    previous_umask = os.umask(0o077)
+    try:
+        write_failure_report(path, [])
+    finally:
+        os.umask(previous_umask)
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_replacing_existing_report_preserves_its_mode(tmp_path):
+    path = tmp_path / "failed.csv"
+    path.write_text("previous report\n", encoding="utf-8")
+    path.chmod(0o640)
+
+    write_failure_report(path, [])
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+
+
+def test_existing_mode_is_applied_with_fchmod_while_temp_fd_is_open(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "failed.csv"
+    path.write_text("previous report\n", encoding="utf-8")
+    path.chmod(0o640)
+    real_fchmod = os.fchmod
+    fchmod_modes = []
+
+    def recording_fchmod(file_descriptor, mode):
+        os.fstat(file_descriptor)
+        fchmod_modes.append(stat.S_IMODE(mode))
+        real_fchmod(file_descriptor, mode)
+
+    def forbidden_path_chmod(*args, **kwargs):
+        raise AssertionError("temporary paths must not be chmodded after close")
+
+    def forbidden_os_chmod(*args, **kwargs):
+        raise AssertionError("temporary paths must not be chmodded after close")
+
+    monkeypatch.setattr(report.os, "fchmod", recording_fchmod)
+    monkeypatch.setattr(report.os, "chmod", forbidden_os_chmod)
+    monkeypatch.setattr(Path, "chmod", forbidden_path_chmod)
+
+    write_failure_report(path, [])
+
+    assert fchmod_modes == [0o640]
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+
+
+def test_writes_report_with_legal_name_near_name_max(tmp_path):
+    suffix = ".csv"
+    name_max = os.pathconf(tmp_path, "PC_NAME_MAX")
+    stem_length = min(240, name_max - len(suffix))
+    path = tmp_path / ("a" * stem_length + suffix)
+
+    write_failure_report(path, [])
+
+    assert path.read_bytes() == (
+        ",".join(FAILURE_REPORT_COLUMNS) + "\n"
+    ).encode()
+    assert list(tmp_path.glob(".*.tmp")) == []
