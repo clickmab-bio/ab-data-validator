@@ -45,10 +45,12 @@ def _observation(
     optimal_alignment_count: int | None = 1,
     enumerated_alignment_count: int = 1,
     truncated: bool = False,
+    aligned_candidate: str = "ARDY-",
+    aligned_positive: str = "ARDYG",
 ) -> PairwiseObservation:
     return PairwiseObservation(
-        first_aligned_candidate="ARDY-",
-        first_aligned_positive="ARDYG",
+        first_aligned_candidate=aligned_candidate,
+        first_aligned_positive=aligned_positive,
         first_identity=identity,
         min_identity=identity if min_identity is None else min_identity,
         max_identity=identity if max_identity is None else max_identity,
@@ -399,6 +401,111 @@ def test_write_uses_one_snapshot_for_summary_and_differences(
         rows = list(csv.DictReader(handle))
     assert payload["configurations"][0]["comparison_count"] == 1
     assert [row["candidate_name"] for row in rows] == ["BeforeSnapshot"]
+
+
+def test_concurrent_completion_order_does_not_change_report_bytes(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def run_with_completion_order(output_dir, completion_order):
+        evaluator = ShadowEvaluator(
+            configs=DEFAULT_CONFIGS[:1],
+            threshold=0.8,
+            max_optimal_alignments=1000,
+        )
+        sequences = ("AAAA", "ZZZZ")
+        ready = {sequence: threading.Event() for sequence in sequences}
+        release = {sequence: threading.Event() for sequence in sequences}
+
+        def controlled_observe(config, candidate_cdr, positive_cdr):
+            del config
+            ready[candidate_cdr].set()
+            assert release[candidate_cdr].wait(timeout=5)
+            return _observation(
+                identity=0.75,
+                aligned_candidate=f"{candidate_cdr}-",
+                aligned_positive=positive_cdr,
+            )
+
+        monkeypatch.setattr(evaluator, "_observe", controlled_observe)
+        comparisons = {
+            sequence: _comparison(
+                candidate_name="SameCandidate",
+                positive_name="SamePositive",
+                cdr_name="HCDR3",
+                candidate_cdr=sequence,
+                positive_cdr=f"{sequence}P",
+            )
+            for sequence in sequences
+        }
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = {
+                sequence: executor.submit(
+                    evaluator.observe,
+                    comparisons[sequence],
+                    (f"MUSCLE-{sequence}", f"MUSCLE-{sequence}P"),
+                    1.0,
+                )
+                for sequence in sequences
+            }
+            assert all(event.wait(timeout=5) for event in ready.values())
+            for sequence in completion_order:
+                release[sequence].set()
+                futures[sequence].result(timeout=5)
+
+        evaluator.write(output_dir)
+        return (
+            (output_dir / "summary.json").read_bytes(),
+            (output_dir / "differences.csv").read_bytes(),
+        )
+
+    first_summary, first_csv = run_with_completion_order(
+        tmp_path / "first",
+        ("ZZZZ", "AAAA"),
+    )
+    second_summary, second_csv = run_with_completion_order(
+        tmp_path / "second",
+        ("AAAA", "ZZZZ"),
+    )
+
+    assert first_summary == second_summary
+    assert first_csv == second_csv
+    rows = list(
+        csv.DictReader(first_csv.decode("utf-8").splitlines())
+    )
+    assert [row["candidate_cdr"] for row in rows] == ["AAAA", "ZZZZ"]
+
+
+def test_difference_sort_handles_unknown_and_known_alignment_counts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    evaluator = ShadowEvaluator(
+        configs=DEFAULT_CONFIGS[:1],
+        threshold=0.8,
+        max_optimal_alignments=1000,
+    )
+    observations = iter(
+        (
+            _observation(identity=0.75, optimal_alignment_count=1),
+            _observation(identity=0.75, optimal_alignment_count=None),
+        )
+    )
+    monkeypatch.setattr(
+        evaluator,
+        "_observe",
+        lambda config, candidate_cdr, positive_cdr: next(observations),
+    )
+
+    evaluator.observe(_comparison(), ("ARDY-", "ARDYG"), 1.0)
+    evaluator.observe(_comparison(), ("ARDY-", "ARDYG"), 1.0)
+    evaluator.write(tmp_path)
+
+    with (tmp_path / "differences.csv").open(
+        encoding="utf-8", newline=""
+    ) as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["optimal_alignment_count"] for row in rows] == ["", "1"]
 
 
 def test_any_nonzero_float_difference_creates_difference_record(

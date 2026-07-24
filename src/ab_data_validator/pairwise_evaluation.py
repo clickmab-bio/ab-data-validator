@@ -87,6 +87,38 @@ class _EvaluationSnapshot:
     differences: tuple[DifferenceRecord, ...]
 
 
+def _optional_int_sort_key(value: int | None) -> tuple[int, int]:
+    if value is None:
+        return (0, 0)
+    return (1, value)
+
+
+def _difference_sort_key(record: DifferenceRecord) -> tuple[object, ...]:
+    return (
+        record.candidate_name,
+        record.positive_name,
+        record.cdr_name,
+        record.candidate_cdr,
+        record.positive_cdr,
+        record.config_key,
+        record.muscle_identity.hex(),
+        record.biopython_identity.hex(),
+        record.biopython_min_identity.hex(),
+        record.biopython_max_identity.hex(),
+        record.muscle_high,
+        record.biopython_high,
+        record.false_negative,
+        record.threshold_ambiguous,
+        _optional_int_sort_key(record.optimal_alignment_count),
+        record.enumerated_alignment_count,
+        record.truncated,
+        record.muscle_aligned_candidate,
+        record.muscle_aligned_positive,
+        record.biopython_aligned_candidate,
+        record.biopython_aligned_positive,
+    )
+
+
 class ShadowEvaluator:
     def __init__(
         self,
@@ -412,12 +444,7 @@ class ShadowEvaluator:
 
         differences = sorted(
             snapshot.differences,
-            key=lambda record: (
-                record.candidate_name,
-                record.positive_name,
-                record.cdr_name,
-                record.config_key,
-            ),
+            key=_difference_sort_key,
         )
         field_names = [field.name for field in fields(DifferenceRecord)]
         with (output_dir / "differences.csv").open(
