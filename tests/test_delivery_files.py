@@ -111,6 +111,7 @@ def test_readme_documents_pairwise_production_and_muscle_fallback():
     assert "33.574 秒" in readme
     assert "721.451 秒" in readme
     assert "21.49 倍" in readme
+    assert "v1.3 发布前已按相同 16 核方法复验通过" in readme
 
 
 def test_readme_documents_expanded_library_and_openclaw_benchmark():
